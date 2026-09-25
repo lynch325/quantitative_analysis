@@ -1,3 +1,12 @@
+"""数据任务运行记录（ORM 版，表 `data_job_run`）。
+
+**已无实际引用**：任务状态落盘走 ParquetDataJobStateStore（data_job_runs /
+data_job_cursors 两张 Parquet 表），本模型只在 app/models/__init__.py 里导出兼容。
+
+口径提醒：`updated_at` 的 onupdate 用 `datetime.utcnow`，而 default 与其它时间列
+用 `now_local`（本地时间）——同一行里两种时区口径混用，比对时间时需注意。
+"""
+
 from datetime import datetime
 
 from app.extensions import db
@@ -30,6 +39,9 @@ class DataJobRun(db.Model):
     )
 
     def to_dict(self):
+        """任务运行的 API 形态（供前端轮询进度）：params_json 与 result_json 已是对象，
+        三个时间戳（queued_at / started_at / finished_at）转 ISO 串，缺失为 None。
+        """
         return {
             "id": self.id,
             "job_type": self.job_type,

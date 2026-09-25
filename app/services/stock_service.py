@@ -1,3 +1,21 @@
+"""个股数据查询服务：把 Parquet 表按「单标的 + 时间窗」取数并整理成前端结构。
+
+三类内容：
+- **读表方法**（get_stock_list / get_stock_info / get_daily_history / get_daily_basic /
+  get_stock_factors / get_ma_data / get_moneyflow / get_cyq_perf / get_financials /
+  get_stock_company / get_industry_list / get_area_list）：多数挂
+  @cached(expire=300~3600)。缓存键包含全部入参，**逐股票逐日期调用会让命中率
+  趋零**，并把进程内缓存推向容量上限（见 app/utils/cache.py 的 4096 上限）；
+- **筛选**（screen_stocks）：全市场条件过滤，结果有 max_results 上限并返回
+  has_more，前端不做二次分页——调大上限会同步放大响应体与内存占用；
+- **本地技术指标兜底**（_calculate_technical_indicators 及 MACD/KDJ/RSI/BOLL
+  辅助函数）：仅当 stk_factor 表缺列时使用，是逐行 Python 实现，属慢路径，
+  优先让数据作业把指标落库。
+
+约定：这些方法都不带 self（类只作命名空间，静态调用），服务本身无状态。
+FINANCIAL_FIELDS 定义各财务报表要展示的中文列名映射，改字段需与前端表格同步。
+"""
+
 from typing import List, Dict
 from app.utils.cache import cached
 from app.services.data_reader import ParquetDataReader
@@ -63,21 +81,34 @@ class StockService:
     
     @staticmethod
     @cached(expire=1800, key_prefix='stock_basic')
-    def get_stock_list(industry=None, area=None, search=None, page=1, page_size=20):
-        """获取股票列表"""
+    def get_stock_list(industry=None, area=None, search=None, page=1, page_size=20,
+                       sort_by=None, sort_order='asc'):
+        """获取股票列表（可选按白名单列排序，排序在分页切片之前完成）"""
         try:
-            df = _data_reader.get_stock_basic_list(industry=industry, area=area, search=search)
+            df = _data_reader.get_stock_basic_list(
+                industry=industry,
+                area=area,
+                search=search,
+                sort_by=sort_by,
+                sort_order=sort_order,
+            )
             total = len(df)
             offset = (page - 1) * page_size
             page_df = df.iloc[offset:offset + page_size]
 
             stocks = page_df.where(page_df.notna(), None).to_dict(orient="records")
-            # list_date 转 string
+            # list_date 转 string。
+            # 注意：pd.NaT 同样带 strftime 属性，只用 hasattr 判断会抛
+            # "NaTType does not support strftime"（list_date 缺失的次新股/北交所会触发），
+            # 必须先用 pd.isna 判空。
             for s in stocks:
-                if hasattr(s.get("list_date"), "strftime"):
-                    s["list_date"] = s["list_date"].strftime("%Y-%m-%d")
-                elif s.get("list_date") is not None:
-                    s["list_date"] = str(s["list_date"])
+                value = s.get("list_date")
+                if value is None or pd.isna(value):
+                    s["list_date"] = None
+                elif hasattr(value, "strftime"):
+                    s["list_date"] = value.strftime("%Y-%m-%d")
+                else:
+                    s["list_date"] = str(value)
 
             return {
                 'stocks': stocks,
@@ -297,6 +328,12 @@ class StockService:
 
     @staticmethod
     def _extract_latest_financial_row(df: pd.DataFrame, table_name: str):
+        """从财报数据里挑出每只标的最新的、最可信的一行。
+
+        排序优先级：报告期（end_date）降序 → 更新标记（update_flag=1 优先）→ 公告日降序；
+        并先按 report_type 过滤合并报表 —— 不筛的话合并报表与母公司报表会混在一起。
+        **这是财务口径的关键点**，改动会影响所有财务展示。
+        """
         if df is None or df.empty:
             return None
 
@@ -733,6 +770,10 @@ class StockService:
 
 
 def _format_financial_date(value):
+    """把财务日期统一成 YYYY-MM-DD 展示格式。
+
+    兼容 YYYYMMDD 与已带横线两种输入；其他形态原样返回，不硬猜。
+    """
     if value is None or pd.isna(value):
         return None
     value = str(value)

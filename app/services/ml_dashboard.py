@@ -45,6 +45,12 @@ def get_portfolio_repo():
 
 
 def build_model_performance_summary():
+    """汇总模型表现，供 ML 看板图表使用。
+
+    **test_r2 恒为 None**：evaluate_model 只产出全样本 R²，没有训练/测试划分，
+    置空而不是复制 train_r2 去冒充分割评估 —— 这条口径直接影响前端展示的可信度。
+    评估返回 error 的模型直接跳过。
+    """
     manager = get_ml_manager()
     models = manager.get_model_list()
     performance_data = []
@@ -83,6 +89,10 @@ def build_model_performance_summary():
 
 
 def build_factor_effectiveness_summary():
+    """汇总因子有效性：逐因子取最新交易日暴露度，用平均绝对 z_score 作为重要性。
+
+    暴露度为空时重要性与相关性记 0 而不跳过该因子，保证图表里因子齐全。
+    """
     engine = get_factor_engine()
     definitions = engine.get_factor_list(is_active=True)
     importance_data = []
@@ -125,6 +135,11 @@ def build_factor_effectiveness_summary():
 
 
 def build_portfolio_performance_summary():
+    """汇总各组合表现与行业分布，供组合看板使用。
+
+    逐组合调 calculate_metrics，指标为空的组合跳过；
+    benchmark_return 无基准数据，恒为 None（**不要当 0 处理**）。
+    """
     portfolio_repo = get_portfolio_repo()
     portfolio_ids = portfolio_repo.list_portfolio_ids(active_only=True)
     performance_data = []
@@ -168,6 +183,10 @@ def build_portfolio_performance_summary():
 
 
 def build_risk_analysis_summary():
+    """把组合行业分布转成风险分析图表数据（按权重降序）。
+
+    复用 build_portfolio_performance_summary 的结果，不重复查库。
+    """
     portfolio_summary = build_portfolio_performance_summary()
     risk_data = [
         {"name": name, "value": value}
@@ -179,6 +198,11 @@ def build_risk_analysis_summary():
 
 
 def build_analysis_report():
+    """组装整份分析报告（模型表现 + 因子有效性 + 组合表现 + 风险分析）。
+
+    这是四个汇总函数的**唯一编排点**：新增板块应挂在这里，
+    而不是让前端分四次请求再自行拼装。
+    """
     model_summary = build_model_performance_summary()
     factor_summary = build_factor_effectiveness_summary()
     portfolio_summary = build_portfolio_performance_summary()

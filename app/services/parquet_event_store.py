@@ -1,3 +1,19 @@
+"""实时事件存储：指标（indicators）与交易信号（signals）的 Parquet 追加/查询层。
+
+落盘结构：`{DATA_DIR}/realtime_events/{event_type}/year=/month=/day=/data.parquet`，
+写入时按 datetime 的日期分组、与当天既有分区合并后**原子替换**该分区文件。
+
+读写的三条关键约定（改动前必读）：
+- 读 = 该事件类型全部分区扫描 + concat，没有按时间窗做分区裁剪，
+  因此 get_* 类查询的成本随历史天数线性增长，属"低频事件、可接受"的取舍；
+- 写 = 整分区读-改-写，必须走 locked(event_type)（flock）；
+  已在锁内时必须调用 *_unlocked 变体，重入同一 event_type 会死锁；
+- 分区文件损坏不能静默返回空表：上层读-改-写会把空表当基线，
+  concat 后覆盖掉该分区既有数据，故 _read_partition 先隔离坏文件（quarantine）。
+
+典型调用方：realtime_* 系列引擎（写指标/信号）、推送服务与相关 API 路由（读）。
+"""
+
 from __future__ import annotations
 
 import os
@@ -45,6 +61,8 @@ class ParquetEventStore:
         return path
 
     def _partition_path(self, event_type: str, day: datetime) -> Path:
+        """事件分区路径：事件目录 / year= / month= / day= / data.parquet。
+        """
         return (
             self._event_dir(event_type)
             / f"year={day.year:04d}"
@@ -54,6 +72,11 @@ class ParquetEventStore:
         )
 
     def _ensure_frame(self, rows: Iterable[Dict[str, Any]] | pd.DataFrame) -> pd.DataFrame:
+        """把 dict 列表或 DataFrame 统一成 DataFrame，并归一已知时间列。
+
+        时间列（datetime/created_at/updated_at/expiry_time/resolved_at）统一转
+        datetime，无法解析的置 NaT（随后在写入路径被 dropna 丢弃）。
+        """
         if isinstance(rows, pd.DataFrame):
             frame = rows.copy()
         else:
@@ -73,6 +96,11 @@ class ParquetEventStore:
         return frame
 
     def _read_partition(self, path: Path) -> pd.DataFrame:
+        """读取单个分区文件；不存在返回空表。
+
+        读到损坏文件时先把该文件隔离（quarantine_corrupt_parquet）再返回空表——
+        若只吞异常返回空表，上层读-改-写会把空表当基线，覆盖掉分区既有数据。
+        """
         if not path.is_file():
             return pd.DataFrame()
         try:
@@ -87,6 +115,11 @@ class ParquetEventStore:
             return pd.DataFrame()
 
     def _read_event_frame(self, event_type: str) -> pd.DataFrame:
+        """读取某事件类型的全部分区并合并（无分区时返回空表）。
+
+        时间列统一转 datetime、id 统一转数值；并发写入期间可能读到
+        上次原子替换前的完整旧分区，不会读到半个文件。
+        """
         root = self._event_dir(event_type)
         paths = sorted(root.glob("year=*/month=*/day=*/data.parquet"))
         if not paths:
@@ -106,12 +139,24 @@ class ParquetEventStore:
         return frame
 
     def _write_event_frame(self, event_type: str, frame: pd.DataFrame) -> int:
+        """写入事件表（自动加锁），返回**入参行数**（去重前的本次提交量）。"""
         with self.locked(event_type):
             return self._write_event_frame_unlocked(event_type, frame, merge_existing=True)
 
     def _write_event_frame_unlocked(
         self, event_type: str, frame: pd.DataFrame, merge_existing: bool = True
     ) -> int:
+        """按日期分区写入（调用方必须已持锁），返回入参行数。
+
+        每个日期分区内的处理顺序：
+        1. merge_existing=True 时先读当天既有分区做 concat，否则整分区覆盖；
+        2. 缺 id 列时从全表（_read_event_frame）最大 id 起分配自增 id；
+        3. 按业务键（id/ts_code/datetime/period_type/指标或策略名）去重，keep=last，
+           故**重复提交同一根指标会覆盖旧值而非追加**；
+        4. 排序后 atomic_write_parquet 原子替换分区文件。
+
+        注意：datetime 无法解析的行会被静默丢弃（返回行数仍计入原始条数）。
+        """
         if frame is None or frame.empty:
             return 0
 
@@ -191,6 +236,11 @@ class ParquetEventStore:
         start_time: Optional[datetime] = None,
         end_time: Optional[datetime] = None,
     ) -> pd.DataFrame:
+        """读取某类事件并按 ts_code / period_type / 时间区间过滤。
+
+        先解析 datetime 并丢弃无法解析的行，脏数据不参与范围比较；
+        各过滤条件只在对应列存在时生效，缺列不报错（历史分区字段不齐）。
+        """
         frame = self._read_event_frame(event_type)
         if frame.empty:
             return frame
@@ -225,10 +275,12 @@ class ParquetEventStore:
         return frame
 
     def append_indicators(self, rows: Iterable[Dict[str, Any]] | pd.DataFrame) -> int:
+        """追加/更新指标记录（event_type=indicators），返回提交行数。"""
         frame = self._ensure_frame(rows)
         return self._write_event_frame("indicators", frame)
 
     def append_signals(self, rows: Iterable[Dict[str, Any]] | pd.DataFrame) -> int:
+        """追加/更新交易信号（event_type=signals），返回提交行数。"""
         frame = self._ensure_frame(rows)
         return self._write_event_frame("signals", frame)
 
@@ -239,6 +291,11 @@ class ParquetEventStore:
         indicator_names: Optional[Sequence[str]] = None,
         limit: int = 100,
     ) -> pd.DataFrame:
+        """取某股某周期的最新指标，**按 datetime 倒序**（最新在前）截断 limit 条。
+
+        indicator_names 省略时返回全部指标；先取最新再过滤名称
+        （过滤发生在取数之后，因此 limit 是"每指标各若干"的近似语义）。
+        """
         frame = self._filter_frame("indicators", ts_code=ts_code, period_type=period_type)
         if frame.empty:
             return frame
@@ -256,6 +313,10 @@ class ParquetEventStore:
         start_time: Optional[datetime] = None,
         end_time: Optional[datetime] = None,
     ) -> pd.DataFrame:
+        """取单只股票单个指标的时间序列，**按 datetime 升序**返回全量。
+
+        与 get_latest_indicators 相反：这里不截断，供绘图/因子计算使用。
+        """
         frame = self._filter_frame(
             "indicators",
             ts_code=ts_code,
@@ -277,6 +338,7 @@ class ParquetEventStore:
         start_time: datetime,
         end_time: datetime,
     ) -> pd.DataFrame:
+        """时间窗内的指标（可按代码/周期可选过滤），升序返回，不做条数截断。"""
         return self._filter_frame(
             "indicators",
             ts_code=ts_code,
@@ -286,6 +348,10 @@ class ParquetEventStore:
         )
 
     def get_indicator_stats(self) -> Dict[str, Any]:
+        """指标表整体统计（总条数/股票数/按指标名与周期计数/时间范围）。
+
+        每次调用都全量扫描并读入内存，只适合管理页低频调用，勿放入高频路径。
+        """
         frame = self._read_event_frame("indicators")
         if frame.empty:
             return {
@@ -317,6 +383,11 @@ class ParquetEventStore:
         }
 
     def cleanup_old_indicators(self, days_to_keep: int = 30) -> int:
+        """删除早于 `days_to_keep` 天的指标记录，返回删除条数。
+
+        持锁执行；按 datetime 过滤后整表重写（_rewrite_event_frame_unlocked
+        会顺带 unlink 不再有数据的旧分区），因此会真实释放磁盘。
+        """
         cutoff = now_local() - pd.Timedelta(days=days_to_keep)
         with self.locked("indicators"):
             frame = self._read_event_frame("indicators")
@@ -333,6 +404,10 @@ class ParquetEventStore:
         strategy_name: Optional[str] = None,
         limit: int = 100,
     ) -> pd.DataFrame:
+        """取当前活跃信号（status == 'ACTIVE'，大小写不敏感），按时间倒序取 limit 条。
+
+        读的是全部分区；策略名过滤在读取后执行，故 limit 为近似语义。
+        """
         frame = self._read_event_frame("signals")
         if frame.empty:
             return frame
@@ -353,6 +428,7 @@ class ParquetEventStore:
         ts_code: Optional[str] = None,
         strategy_name: Optional[str] = None,
     ) -> pd.DataFrame:
+        """时间窗内的信号（不限状态），升序返回全量，用于绩效统计与回放。"""
         frame = self._filter_frame("signals", ts_code=ts_code, start_time=start_time, end_time=end_time)
         if frame.empty:
             return frame
@@ -368,6 +444,10 @@ class ParquetEventStore:
         limit: int = 20,
         status: Optional[str] = "ACTIVE",
     ) -> pd.DataFrame:
+        """取 since 至当前时刻的信号（默认只要 ACTIVE），按时间倒序取 limit 条。
+
+        status=None 表示不过滤状态。
+        """
         frame = self._filter_frame("signals", start_time=since, end_time=now_local())
         if frame.empty:
             return frame
@@ -378,6 +458,14 @@ class ParquetEventStore:
         return frame.sort_values("datetime", ascending=False).head(limit).reset_index(drop=True)
 
     def get_signal_performance(self, strategy_name: Optional[str] = None, days: int = 30) -> Dict[str, Any]:
+        """近 days 天信号绩效：胜率、平均/累计盈亏、最大盈利与最大亏损。
+
+        口径提醒（易误读）：统计前先把窗口内的信号裁到
+        status ∈ {EXECUTED, EXPIRED}，所以返回的 `total_signals` 是
+        「已执行 + 已过期」条数，**不等于**窗口内产生的全部信号数；
+        胜率分母为 EXECUTED 且 profit_loss 非空的条数。
+        另：frame 为空或过滤后为空时统一返回全零结构，调用方无需判 None。
+        """
         end_time = now_local()
         start_time = end_time - pd.Timedelta(days=days)
         frame = self.get_signals_by_time_range(start_time, end_time, strategy_name=strategy_name)
@@ -438,6 +526,10 @@ class ParquetEventStore:
         }
 
     def get_signal_stats(self) -> Dict[str, Any]:
+        """信号表整体统计（总数/股票数/按状态、策略、类型计数/时间范围）。
+
+        与 get_indicator_stats 同样每次全量扫描，仅用于低频管理视图。
+        """
         frame = self._read_event_frame("signals")
         if frame.empty:
             return {
@@ -473,6 +565,12 @@ class ParquetEventStore:
         executed_price: Optional[float] = None,
         profit_loss: Optional[float] = None,
     ) -> bool:
+        """按 id 更新信号状态，返回是否找到并更新（False = 表空/无 id 列/该 id 不存在）。
+
+        副作用：传 executed_price 会同时写入 executed_time；
+        传 profit_loss 且表内有 trigger_price 时按触发价算出 profit_loss_pct。
+        持锁整表读改写，会触发分区重写。
+        """
         with self.locked("signals"):
             frame = self._read_event_frame("signals")
             if frame.empty or "id" not in frame.columns:
@@ -495,6 +593,11 @@ class ParquetEventStore:
         return True
 
     def expire_old_signals(self, hours: int = 24) -> int:
+        """把超过 hours 小时仍为 ACTIVE 的信号置为 EXPIRED，返回条数。
+
+        只有 status 列存在时才限定 ACTIVE；无该列则匹配全部超时信号。
+        无命中时不写盘。
+        """
         with self.locked("signals"):
             frame = self._read_event_frame("signals")
             if frame.empty or "datetime" not in frame.columns:

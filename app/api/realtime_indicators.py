@@ -25,6 +25,12 @@ _indicator_engine_data_dir = None
 
 
 def get_indicator_engine():
+    """惰性构造全局指标引擎单例。
+
+    两种返回既有实例的情况：
+    1. 被测用例注入的替身（不是 RealtimeIndicatorEngine 实例）原样返回，不被覆盖；
+    2. 已构造但 DATA_DIR 变了 —— 必须重建，否则会继续读旧数据目录。
+    """
     global indicator_engine, _indicator_engine_data_dir
     current_data_dir = os.getenv("DATA_DIR")
 

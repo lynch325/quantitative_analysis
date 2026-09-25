@@ -1,3 +1,21 @@
+"""机器学习模型管理器：模型的训练、评估、落盘与预测。
+
+支持三类模型（random_forest / xgboost / lightgbm，见 model_configs 的默认参数）
+与四种目标类型（return_1d / return_5d / return_20d / ranking）。
+
+三条关键约定（改动前先读）：
+- 标签口径：目标类型决定未来收益期数（`return_Nd` → N，见 _target_period），
+  训练前必须用 resolve_training_date_range 截断日期区间，保证尾部样本能算出
+  未来收益——否则最后 N 个交易日的标签是缺失值；
+- 模型文件落在**项目根 models/**（用绝对路径锚定，避免从不同 cwd 启动时
+  训练与预测指向不同目录），定义与元数据经 ModelRepository 持久化；
+- 进程内缓存 self.models / self.scalers 以磁盘 mtime 判失效（_model_mtimes），
+  重训落盘后预测端会自动重载；多进程部署时各进程各自持有缓存。
+
+注意：训练是 CPU 密集同步过程（sklearn/xgb/lgb 内部 n_jobs=-1），
+不要在 Web 请求线程里直接跑，见 ml_factor_api 的后台线程提交方式。
+"""
+
 import pandas as pd
 import numpy as np
 from typing import List, Dict, Any, Optional, Tuple
@@ -29,6 +47,11 @@ class MLModelManager:
     SUPPORTED_TARGET_TYPES = {"return_1d", "return_5d", "return_20d", "ranking"}
     
     def __init__(self, state_store: ParquetStateStore = None):
+        """装配模型默认参数表、因子/模型仓库与进程内模型缓存。
+
+        state_store 省略时用默认 ParquetStateStore；缓存键为 model_id，
+        model_dir 固定指向项目根 models/ 并确保目录存在。
+        """
         self.models = {}  # 缓存已加载的模型
         self.scalers = {}  # 缓存特征缩放器
         # 记录缓存模型对应的磁盘 mtime：重训会落盘新文件，
@@ -89,15 +112,25 @@ class MLModelManager:
 
     @classmethod
     def is_supported_target_type(cls, target_type: str) -> bool:
+        """目标类型是否受支持（见 SUPPORTED_TARGET_TYPES），供 API 入口做参数校验。"""
         return target_type in cls.SUPPORTED_TARGET_TYPES
 
     @staticmethod
     def _target_period(target_type: str) -> int:
+        """目标类型 → 未来收益期数（交易日）。
+
+        只识别 `return_Nd` 形式；`ranking` 等其它类型一律按 5 日处理。
+        该值决定标签前移格数，改动会直接改变训练标签的构造。
+        """
         if isinstance(target_type, str) and target_type.startswith("return_"):
             return int(target_type.split("_")[1].replace("d", ""))
         return 5
 
     def _get_model_definition(self, model_id: str) -> Dict[str, Any]:
+        """读取模型定义并补齐可选字段（factor_list / model_params / training_config 缺省为空）。
+
+        定义不存在时返回 `{}`，调用方以 falsy 判断「模型未注册」。
+        """
         model_def = self.model_repo.get_definition(model_id)
         if not model_def:
             return {}

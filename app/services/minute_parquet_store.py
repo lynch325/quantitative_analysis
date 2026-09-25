@@ -1,3 +1,16 @@
+"""分钟线写盘：按 (日期, period_type) 分区写入 `stock_minute/{period}/year=/month=/day=/data.parquet`。
+
+写入语义（与读取端 minute_parquet_reader 对称）：
+- 先按「日期 + period_type」分组再落盘——一天内混入多周期时必须分组，
+  否则会按第一行的 period_type 把其余周期写进错误目录；
+- 每个分区是**读-合并-写**：合并既有分区后按 (ts_code, datetime, period_type)
+  去重 keep=last，再用 atomic_write_parquet 原子替换，崩溃不会留半个文件；
+- 全程持分区级文件锁（同步任务与聚合任务可能并发写同一天）。
+
+其它约定：`datetime` 列必填（缺失抛 ValueError），解析失败的行被丢弃；
+Windows 无 fcntl，锁退化为空操作，单机单进程场景仍安全。
+"""
+
 from __future__ import annotations
 
 import os
@@ -30,6 +43,12 @@ class MinuteParquetStore:
         self.data_dir = data_dir
 
     def write_frame(self, frame: pd.DataFrame, period_type: str) -> int:
+        """写入分钟数据，按 (日期, period_type) 分组落到各自分区，返回写入行数。
+
+        **按 period_type 一起分组是刻意的**：一天内混入多周期数据时，
+        旧实现用 iloc[0] 的 period_type 决定分区路径，其余周期的数据会被写进错误目录。
+        datetime 缺失或不可解析的行直接丢弃。
+        """
         if frame is None or frame.empty:
             return 0
 
@@ -54,6 +73,12 @@ class MinuteParquetStore:
         return total_rows
 
     def _write_day_frame(self, day_df: pd.DataFrame, date_value) -> int:
+        """写入单个交易日的分区（读-合并-写 + 原子替换）。
+
+        - 全程持**分区级文件锁**：同步任务与聚合任务可能并发写同一天；
+        - 按 (ts_code, datetime, period_type) 去重并保留最后一条；
+        - 先写临时文件再原子替换，避免写一半崩溃留下坏分区。
+        """
         year = f"{date_value.year:04d}"
         month = f"{date_value.month:02d}"
         day = f"{date_value.day:02d}"
@@ -84,6 +109,11 @@ class MinuteParquetStore:
         return len(combined)
 
     def _read_existing_partition(self, parquet_path: Path) -> pd.DataFrame:
+        """读取待合并的既有分区。
+
+        **坏文件不能静默当空表**：合并写入会把该分区已有数据整体覆盖掉；
+        因此先隔离（quarantine）坏文件再返回空表 —— 数据可以人工恢复，静默丢失不可恢复。
+        """
         try:
             return pd.read_parquet(parquet_path)
         except Exception as exc:

@@ -98,6 +98,11 @@ def resolve_fetch_periods(latest_local: Optional[str], expected: str) -> List[st
 
 
 def _read_existing_partition(table: str, end_date: str, data_dir: Optional[str]) -> Optional[pd.DataFrame]:
+    """读取已存在的分区文件，供分块 flush 时合并旧数据；不存在返回 None。
+
+    **回退口径必须与 save_to_parquet / latest_partition_date 一致**（DATA_DIR 或项目 data/），
+    否则 DATA_DIR 未设置时读不到已有分区，分块 flush 会互相覆盖导致丢数据。
+    """
     clean = str(end_date).replace("-", "")
     # 回退口径必须与 save_to_parquet/latest_partition_date 一致（DATA_DIR 或项目 data/），
     # 否则 DATA_DIR 未设置时读不到已有分区，分块 flush 会互相覆盖丢数据
@@ -192,6 +197,12 @@ def _sync_table(
 
 
 def main() -> int:
+    """作业入口：按财报表逐个增量拉取并写分区。
+
+    DATA_JOB_FULL_REFRESH 为真时全量重拉，否则从上一次分区日期续拉；
+    标的可覆盖全部 A 股，属最重的同步作业之一。
+    stock_basic 与快照都取不到标的时返回 1（作业失败）。
+    """
     load_dotenv()
     data_dir = os.getenv("DATA_DIR")
     full_refresh = env_bool("DATA_JOB_FULL_REFRESH", default=False)

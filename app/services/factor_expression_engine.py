@@ -1,3 +1,19 @@
+"""自定义因子表达式引擎：在单只股票的时间序列 DataFrame 上安全求值。
+
+设计要点（**白名单 + 因果性**，改动前务必读完整）：
+- 用 ast 解析后只允许白名单内的列、Series 方法、窗口聚合与二元/一元运算，
+  不做 eval，避免表达式注入；
+- `allowed_series_methods` 只放**时间因果**原语：pct_change / shift / diff / rolling。
+  注意 rank 被刻意移除——`Series.rank()` 是整条时间序列上的排名，会把未来价格
+  纳入分母（全样本前视）；截面排名必须在评分层按单日截面做；
+- `causal_period_methods` 会拦截负参数（如 `close.shift(-1)` 取的是明天价格）；
+- `max_rolling_window` 上限 10000，防止构造超大窗口拖垮计算；
+- 求值单位是**单个 ts_code 的序列**（调用方按 ts_code groupby 后逐只传入），
+  不负责横截面运算。
+
+使用方：factor_engine._calculate_custom_factor（预热窗口按其 rolling 窗口自动扩容）。
+"""
+
 import ast
 import operator
 from typing import Any, Dict, Optional
@@ -90,6 +106,11 @@ class FactorExpressionEngine:
         return max_window
 
     def evaluate(self, expression: str, df: pd.DataFrame) -> pd.DataFrame:
+        """求值因子表达式，返回带 factor_value 列的新 DataFrame。
+
+        入口三件事：空表达式抛错、标量结果广播成整列、非 Series 结果拒绝。
+        **入参 df 不被修改**（copy 后加列），调用方可以安全复用。
+        """
         if df is None or df.empty:
             return pd.DataFrame(columns=["factor_value"])
         if not expression or not str(expression).strip():
@@ -109,6 +130,14 @@ class FactorExpressionEngine:
         return result
 
     def _eval_node(self, node: ast.AST, df: pd.DataFrame):
+        """递归求值 AST 节点（白名单式递归下降）。
+
+        安全边界都在这里：
+        - 只允许登记过的运算符；
+        - 变量名必须「不以 __ 开头」且在 allowed_columns 内，否则报 column not allowed ——
+          这是阻止表达式触达任意属性的关键；
+        - 列不存在报 column not found，把「不许用」与「没这列」分开，便于排错。
+        """
         if isinstance(node, ast.BinOp):
             left = self._eval_node(node.left, df)
             right = self._eval_node(node.right, df)
@@ -143,6 +172,11 @@ class FactorExpressionEngine:
         raise ValueError(f"unsupported expression node: {type(node).__name__}")
 
     def _eval_call(self, node: ast.Call, df: pd.DataFrame):
+        """求值函数调用节点：函数名必须在 allowed_functions 白名单内。
+
+        两种形态：普通函数调用（参数先降为标量）与方法调用（如 rolling(5).mean()）。
+        方法名同样拒绝 __ 开头的属性（如 __class__），防止借属性链逃出白名单。
+        """
         if isinstance(node.func, ast.Name):
             func_name = node.func.id
             if func_name not in self.allowed_functions:

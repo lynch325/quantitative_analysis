@@ -44,6 +44,11 @@ class LLMClient:
         return host in ('localhost', '127.0.0.1', '0.0.0.0', '::1')
 
     def endpoint(self) -> str:
+        """拼出 chat/completions 的完整地址，兼容三类服务商。
+
+        已以 /chat/completions 结尾则原样返回；路径里已有 v1 段（OpenAI 官方与各类兼容网关）
+        直接拼接，否则补 /v1 前缀（DeepSeek 裸域名、Ollama 根路径）—— 漏掉这步会直接 404。
+        """
         base = self.base_url.rstrip('/')
         if base.endswith('/chat/completions'):
             return base
@@ -75,6 +80,8 @@ class LLMClient:
         tools: Optional[List[Dict[str, Any]]] = None,
         stream: bool = True,
     ) -> Iterator[Dict[str, Any]]:
+        """统一入口：按 stream 决定走流式还是单次，返回**事件迭代器**（不是字符串）。
+        """
         if stream:
             yield from self._chat_stream(messages, tools)
         else:
@@ -84,6 +91,10 @@ class LLMClient:
     # 非流式（测试与降级路径）
 
     def _chat_once(self, messages, tools) -> Iterator[Dict[str, Any]]:
+        """非流式调用：发一次请求，产出单条 assistant 事件（含 tool_calls）。
+
+        响应结构异常（缺 choices / message）统一抛 LLMClientError，不把 KeyError 漏给上层。
+        """
         payload = self._build_payload(messages, tools, stream=False)
         response = self._post(payload)
         try:
@@ -106,6 +117,15 @@ class LLMClient:
     # 流式：SSE 增量解析
 
     def _chat_stream(self, messages, tools) -> Iterator[Dict[str, Any]]:
+        """流式调用：解析 SSE 逐行产出增量内容与工具调用事件。
+
+        两个必须踩对的点：
+        1. **response.encoding 显式设为 utf-8** —— 兼容接口的 Content-Type 通常不带 charset，
+           requests 会回退 latin-1，导致中文输出乱码；
+        2. 工具调用是跨多个 chunk 分片下发的，必须按 index 累积 arguments 后再拼接，
+           逐片处理会得到半截 JSON。
+        无法解析的片段只告警跳过，不中断整个流。
+        """
         payload = self._build_payload(messages, tools, stream=True)
         content_parts: List[str] = []
         tool_calls_acc: Dict[int, Dict[str, str]] = {}
@@ -173,6 +193,10 @@ class LLMClient:
     # 内部工具
 
     def _build_payload(self, messages, tools, stream: bool) -> Dict[str, Any]:
+        """组装请求体：模型名、消息、temperature、max_tokens 与 stream。
+
+        有工具时才附上 tools 与 tool_choice=auto。
+        """
         payload: Dict[str, Any] = {
             'model': self.model,
             'messages': messages,
@@ -186,6 +210,11 @@ class LLMClient:
         return payload
 
     def _post(self, payload: Dict[str, Any], stream: bool = False) -> requests.Response:
+        """发 POST，并把网络异常翻译成可读的 LLMClientError（超时会提示可调 LLM_TIMEOUT）。
+
+        非 200 会截取响应体前 300 字符作为错误详情，并按状态码补充排查提示（401 提示检查 LLM_API_KEY）；
+        超时用 (10, timeout)：建连 10 秒、读取按配置。
+        """
         headers = {'Content-Type': 'application/json'}
         if self.api_key:
             headers['Authorization'] = f'Bearer {self.api_key}'
@@ -220,6 +249,11 @@ class LLMClient:
 
     @staticmethod
     def _normalize_tool_calls(raw_tool_calls) -> List[Dict[str, Any]]:
+        """把各服务商形态不一的 tool_calls 归一成统一结构（id / type / function）。
+
+        缺 function.name 的项直接丢弃（无法执行）；id 缺失兜底为 call，
+        arguments 缺失兜底成空对象字符串 —— 下游据此直接 json.loads。
+        """
         normalized = []
         for tc in raw_tool_calls or []:
             function = tc.get('function') or {}

@@ -1,3 +1,17 @@
+"""进程内 TTL 缓存与缓存装饰器。
+
+定位：去 Redis 化后本项目的唯一缓存实现。只在本进程内有效——重启即清空、
+多 worker / Celery worker 之间不共享（详见 CacheManager 的类说明）。
+
+两条硬约定：
+- 值与键都走 JSON 序列化：命中时返回独立副本，调用方改动不会污染缓存；
+- 缓存键必须跨进程稳定（内置 hash() 受 PYTHONHASHSEED 随机化影响），
+  否则同一次请求在不同 worker / 重启后算出的键不同，缓存永远 miss。
+
+调用方：app.services.* 的高频读取方法以 @cached(expire=...) 装饰；
+TTL 由调用方声明，容量上限见 CacheManager.DEFAULT_MAX_ENTRIES（当前硬编码）。
+"""
+
 import hashlib
 import json
 import threading

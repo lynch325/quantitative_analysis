@@ -1,3 +1,23 @@
+"""因子计算引擎：内置因子、自定义（表达式）因子的计算与落库。
+
+两条计算路径：
+- 内置因子（_init_builtin_factors 注册，技术/基本面/资金/筹码四类）走
+  声明式数据源表 DATA_SOURCE_LOADERS + BUILTIN_FACTOR_SOURCES，
+  同一次 calculate_all_factors 调用内多个因子共享 data_cache（一次读表）；
+- 自定义因子走 FactorExpressionEngine 的表达式白名单，逐股票 groupby 后求值，
+  预热窗口按公式里的最大 rolling 窗口自动扩容（见 _calculate_custom_factor）。
+
+口径要点（回测 / API / 打分共用本实现，改动需全局评估）：
+- 财务类因子用**公告日**（ann_date/f_ann_date 孰晚）打点并对齐到交易日，
+  不能用报告期 end_date，否则回测会提前"看到"业绩（未来函数）；
+- 价格类因子统一用后复权价（get_return_prices），否则除权日会出现假缺口；
+- 结果统一经 _finalize_factor_result 清洗（inf/NaN）后落 FactorRepository，
+  截面 z_score / percentile 由下游打分引擎消费。
+
+性能特征：全市场逐日计算是分钟级操作，热点在财务因子的逐行打点路径
+（已改为字符串规范化，见 _canonical_report_date），不要在请求线程内跑全量。
+"""
+
 import pandas as pd
 import numpy as np
 from typing import List, Dict, Any, Optional
@@ -21,6 +41,11 @@ class FactorEngine:
     """因子计算引擎"""
 
     def __init__(self, state_store: ParquetStateStore = None):
+        """装配表达式引擎、数据读取器与因子仓库，并加载内置/自定义因子定义。
+
+        模块级 _get_data_reader() 是进程内单例（避免每实例重复建 reader）；
+        交易日历缓存 _open_trade_dates_cache 懒加载，供公告日对齐使用。
+        """
         self.factor_definitions = {}
         self.builtin_factors = {}
         self.expression_engine = FactorExpressionEngine()
@@ -180,18 +205,27 @@ class FactorEngine:
             return {"valid": False, "error": str(e)}
     
     def calculate_factor(self, factor_id: str, ts_codes: List[str], 
-                        start_date: str, end_date: str) -> pd.DataFrame:
-        """计算指定因子值"""
+                        start_date: str, end_date: str,
+                        data_cache: Dict[str, pd.DataFrame] = None) -> pd.DataFrame:
+        """计算指定因子值
+
+        data_cache: 跨因子共享的数据缓存（calculate_all_factors 传入），
+        同一调用窗口内多个因子共用一次数据读取。
+        """
         try:
             result = pd.DataFrame()
             
             # 检查是否为内置因子
             if factor_id in self.builtin_factors:
-                result = self._calculate_builtin_factor(factor_id, ts_codes, start_date, end_date)
+                result = self._calculate_builtin_factor(
+                    factor_id, ts_codes, start_date, end_date, data_cache=data_cache
+                )
             
             # 检查是否为自定义因子
             elif factor_id in self.factor_definitions:
-                result = self._calculate_custom_factor(factor_id, ts_codes, start_date, end_date)
+                result = self._calculate_custom_factor(
+                    factor_id, ts_codes, start_date, end_date, data_cache=data_cache
+                )
             
             else:
                 logger.warning(f"未找到因子定义: {factor_id}")
@@ -337,6 +371,11 @@ class FactorEngine:
 
     @staticmethod
     def _sorted_by_code_and_date(df: pd.DataFrame) -> pd.DataFrame:
+        """按 (ts_code, trade_date) 升序返回副本。
+
+        所有 rolling / pct_change 类因子都依赖此顺序——调用方若已排序过，
+        这里仍会再复制排序一次，属幂等操作。
+        """
         df = df.copy()
         df["trade_date"] = pd.to_datetime(df["trade_date"])
         return df.sort_values(["ts_code", "trade_date"])
@@ -431,6 +470,32 @@ class FactorEngine:
         """PS历史分位数因子"""
         return self._valuation_percentile_factor(data, factor_id, 'ps_ttm')
 
+    @staticmethod
+    def _canonical_report_date(val) -> Optional[str]:
+        """把报表日期规整成 YYYY-MM-DD 字符串（ISO 串可直接字典序比较取最大）。
+
+        本地 parquet 里 YYYYMMDD 与 YYYY-MM-DD 混存。逐行打点路径每轮调用
+        上万次，标量 pd.to_datetime 的固定开销（含 format='mixed' 的格式推断）
+        曾是主要成本，故常见两种格式走纯字符串 + 日历校验，异常格式才回退 pandas。
+        """
+        if isinstance(val, str):
+            s = val.strip()
+            if len(s) == 8 and s.isdigit():
+                y, m, d = int(s[:4]), int(s[4:6]), int(s[6:])
+            elif (len(s) == 10 and s[4] == "-" and s[7] == "-"
+                  and s[:4].isdigit() and s[5:7].isdigit() and s[8:].isdigit()):
+                y, m, d = int(s[:4]), int(s[5:7]), int(s[8:])
+            else:
+                y = None
+            if y is not None:
+                try:
+                    datetime(y, m, d)
+                except ValueError:
+                    return None
+                return f"{y:04d}-{m:02d}-{d:02d}"
+        ts = pd.to_datetime(val, errors="coerce", format="mixed")
+        return ts.strftime("%Y-%m-%d") if pd.notna(ts) else None
+
     def _point_in_time_stamp(self, *report_rows) -> Optional[str]:
         """财务因子的打点日期：取所用报告的公告日（ann_date/f_ann_date）中最晚的一个。
 
@@ -452,20 +517,24 @@ class FactorEngine:
             candidates = []
             for col in ('f_ann_date', 'ann_date'):
                 val = _field(row, col)
-                ts = pd.to_datetime(val, errors="coerce", format="mixed") if val is not None else pd.NaT
-                if val is not None and pd.notna(ts) and str(val).strip():
-                    candidates.append(ts)
+                if val is None:
+                    continue
+                canon = self._canonical_report_date(val)
+                if canon:
+                    candidates.append(canon)
             if candidates:
+                # ISO 串字典序 == 时间序
                 stamps.append(max(candidates))
             else:
                 end_val = _field(row, 'end_date')
-                end_ts = pd.to_datetime(end_val, errors="coerce", format="mixed") if end_val is not None else pd.NaT
-                if end_val is not None and pd.notna(end_ts) and str(end_val).strip():
-                    stamps.append(end_ts)
+                if end_val is not None:
+                    canon = self._canonical_report_date(end_val)
+                    if canon:
+                        stamps.append(canon)
         if not stamps:
             return None
         # 统一输出 YYYY-MM-DD，避免混合格式字符串参与后续比较
-        return max(stamps).strftime("%Y-%m-%d")
+        return max(stamps)
 
     def _snap_to_trade_date(self, date_text: str) -> Optional[str]:
         """把公告日向后对齐到第一个交易日。
@@ -474,10 +543,15 @@ class FactorEngine:
         不对齐会导致这些快照永远查不到。
         """
         try:
-            ts = pd.to_datetime(date_text)
-        except (TypeError, ValueError):
-            return None
-        if pd.isna(ts):
+            # 入参绝大多数是 _point_in_time_stamp 产出的 YYYY-MM-DD，
+            # np.datetime64 直接解析 ISO 串，开销远低于 pd.to_datetime
+            ts = np.datetime64(date_text)
+        except (ValueError, TypeError):
+            try:
+                ts = np.datetime64(pd.to_datetime(date_text))
+            except (TypeError, ValueError):
+                return None
+        if ts != ts:  # NaT
             return None
 
         if self._open_trade_dates_cache is None:
@@ -494,15 +568,15 @@ class FactorEngine:
 
         arr = self._open_trade_dates_cache
         if arr.size == 0:
-            return ts.strftime("%Y-%m-%d")
+            return str(ts.astype("datetime64[D]"))
 
         # 公告日落在日历覆盖范围之外时退回原始日期：
         # 本地交易日历只覆盖近年，历史公告日若强行 searchsorted
         # 会被对齐到日历第一天（如 2016 年公告被推到 2024 年），严重失真
-        idx = int(np.searchsorted(arr, np.datetime64(ts)))
-        if idx >= arr.size or ts < pd.Timestamp(arr[0]):
-            return ts.strftime("%Y-%m-%d")
-        return pd.Timestamp(arr[idx]).strftime("%Y-%m-%d")
+        idx = int(np.searchsorted(arr, ts))
+        if idx >= arr.size or ts < arr[0]:
+            return str(ts.astype("datetime64[D]"))
+        return str(arr[idx].astype("datetime64[D]"))
 
     def _prepare_quarterly_reports(self, df: pd.DataFrame, value_cols: List[str]) -> pd.DataFrame:
         """整理季度报表：按报告期升序去重，数值列转 numeric。
@@ -783,7 +857,9 @@ class FactorEngine:
             # 计算自定义因子
             for factor_id in self.factor_definitions.keys():
                 try:
-                    result = self.calculate_factor(factor_id, ts_codes, trade_date, trade_date)
+                    result = self.calculate_factor(
+                        factor_id, ts_codes, trade_date, trade_date, data_cache=data_cache
+                    )
                     if not result.empty:
                         all_results.append(result)
                 except Exception as e:
@@ -861,8 +937,12 @@ class FactorEngine:
             return pd.DataFrame()
     
     def _calculate_custom_factor(self, factor_id: str, ts_codes: List[str], 
-                                start_date: str, end_date: str) -> pd.DataFrame:
-        """计算自定义因子（表达式白名单）"""
+                                start_date: str, end_date: str,
+                                data_cache: Dict[str, pd.DataFrame] = None) -> pd.DataFrame:
+        """计算自定义因子（表达式白名单）
+
+        data_cache: 同窗口的多个自定义因子共用一次 get_return_prices 读取。
+        """
         try:
             if factor_id not in self.factor_definitions:
                 return pd.DataFrame()
@@ -898,13 +978,24 @@ class FactorEngine:
             # 与内置动量类因子同一复权口径：close.pct_change(20) 这类
             # 表达式必须基于后复权价，否则除权除息日会出现假缺口。
             # OHLC 全部传入保证同一表达式内的价格列口径一致
-            history_df = self.data_reader.get_return_prices(
-                ts_codes=ts_codes, start_date=extended_start, end_date=end_date,
-                price_fields=["open", "high", "low", "close", "pre_close"],
+            cache_key = (
+                f"custom_return_prices:{end_date}|{extended_start}"
+                f"|{len(ts_codes)}|{ts_codes[0] if ts_codes else ''}"
             )
-            if history_df.empty:
-                return pd.DataFrame()
+            if data_cache is not None and cache_key in data_cache:
+                history_df = data_cache[cache_key]
+            else:
+                history_df = self.data_reader.get_return_prices(
+                    ts_codes=ts_codes, start_date=extended_start, end_date=end_date,
+                    price_fields=["open", "high", "low", "close", "pre_close"],
+                )
+                if history_df.empty:
+                    return pd.DataFrame()
+                if data_cache is not None:
+                    data_cache[cache_key] = history_df
 
+            # 后续会改 trade_date 类型，用副本避免污染共享缓存
+            history_df = history_df.copy()
             history_df["trade_date"] = pd.to_datetime(history_df["trade_date"])
             start_dt = pd.to_datetime(start_date)
             end_dt = pd.to_datetime(end_date)

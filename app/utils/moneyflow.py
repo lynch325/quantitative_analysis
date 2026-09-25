@@ -1,3 +1,13 @@
+"""数据作业：拉 Tushare 资金流向（moneyflow）→ `data/moneyflow/daily/`。
+
+`FIELDS` 为落盘白名单（大中小单买卖金额/量），表由 data_reader 以
+TABLE_DIRS["moneyflow"] 读取（get_moneyflow），并参与大宽表构建。
+
+注意：registry 中 job_type `moneyflow` 现指向 `moneyflow_derived.py`
+（按价格位置法本地估算净额，因数据源不提供逐笔分层）；本脚本是 Tushare 版本，
+未在注册表内。两者写同一张表、口径不同，切换前需确认下游一致性。
+"""
+
 from db_utils import DatabaseUtils
 from parquet_job_helpers import DailyFetchJob
 

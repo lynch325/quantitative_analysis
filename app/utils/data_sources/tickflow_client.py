@@ -63,6 +63,12 @@ class TickflowClient:
         self._session = session or requests.Session()
 
     def _get(self, path: str, params: Optional[Dict[str, Any]] = None) -> Any:
+        """带鉴权的 GET，把网络错误与业务错误统一翻译成 TickflowError。
+
+        - 未配置 api_key 直接抛 no_key；
+        - 值为 None 的参数被剔除，避免被序列化成字符串 None；
+        - 非 200 响应进入业务错误分支（错误码语义见项目 notes）。
+        """
         if not self.api_key:
             raise TickflowError("no_key", f"未配置 {API_KEY_ENV}，请在 .env 中设置后重试")
         clean_params = {k: v for k, v in (params or {}).items() if v is not None}
@@ -110,6 +116,32 @@ class TickflowClient:
                 "start_time": start_time,
                 "end_time": end_time,
             },
+        )
+        return data or {}
+
+    def intraday(
+        self,
+        symbol: str,
+        period: str = "1m",
+        count: Optional[int] = None,
+    ) -> Dict[str, List[Any]]:
+        """最新交易日的分钟K线（日内分时，**Beta**；pro+ 档）。
+
+        端点 ``GET /v1/klines/intraday``（另有 /batch 与 /universe 变体）。
+
+        返回**列式紧凑格式**字典，键为：
+        ``symbol / name / timestamp / trade_date / trade_time /
+        open / high / low / close / volume / amount``
+        —— 每个键对应一个等长数组（**不是行式列表**，`len()` 数的是键个数）。
+
+        单位（与项目其它分钟源一致）：``volume`` = 手，``amount`` = 元。
+
+        ⚠️ 周期只支持 1m/5m/15m/30m/60m；文档 enum 里的 ``10m`` 服务端未开通，
+        传了会抛权限错误。调用方需自行做限频节流（pro 档非无限配额）。
+        """
+        data = self._get(
+            "/v1/klines/intraday",
+            {"symbol": symbol, "period": period, "count": count},
         )
         return data or {}
 

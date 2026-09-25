@@ -29,6 +29,11 @@ _SQLITE_DIALECT_NOTES = """目标数据库是 SQLite，SQL 必须使用 SQLite �
 
 
 def _format_tables_section() -> str:
+    """生成系统提示词里的「可查表」段落：逐表列出说明与可查列。
+
+    列清单直接取自 QueryExecutor.TABLE_COLUMNS，与执行器共用一份定义，
+    不会出现提示词里能查、实际查不到的表。
+    """
     from app.services.text2sql_engine import QueryExecutor
 
     lines: List[str] = []
@@ -39,6 +44,10 @@ def _format_tables_section() -> str:
 
 
 def _format_tools_section(allow_actions: bool) -> str:
+    """生成系统提示词里的「可用工具」段落，并标注【只读】/【动作】。
+
+    allow_actions=False 时动作类工具不下发，模型也就不会去调用它们。
+    """
     lines = []
     for tool in AI_TOOLS:
         if not allow_actions and tool.kind == 'action':
@@ -49,6 +58,11 @@ def _format_tools_section(allow_actions: bool) -> str:
 
 
 def build_system_prompt(allow_actions: bool = True, model_name: str = '') -> str:
+    """拼装系统提示词：模式说明 + 可查表 + 工具清单等段落。
+
+    allow_actions 与 model_name 都是行为开关：前者决定是否下发动作类工具并写入相应约束，
+    后者用于针对具体模型做措辞适配。改提示词会同时影响所有对话的行为，属高敏感区域。
+    """
     mode_section = (
         """## 当前模式：操作模式
 你可以调用全部工具，包括下方的【动作】工具。执行动作前请先向用户简要说明将要做什么；
@@ -85,12 +99,13 @@ def build_system_prompt(allow_actions: bool = True, model_name: str = '') -> str
    - 增量窗口：start_date = 数据集 latest_date 的次日，end_date = latest_trade_date
      （不传日期参数时部分任务只下载最新交易日一天，会留下数据缺口，禁止裸调用）
    - 更新单个数据集用 run_data_job；"更新所有数据"用 run_data_jobs 一次提交，
-     标准顺序：["trade_calendar", "stock_basic", "stock_company", "daily_history_by_date",
-     "daily_basic", "moneyflow", "stk_factor", "cyq_perf"]（用户要求财务数据时追加
-     "income_statement", "balance_sheet", "cash_flow"）
-   - 财务三表（利润表/资产负债表/现金流量表）走 Tushare vip 接口
-     （income_vip/balancesheet_vip/cashflow_vip），按报告期自动增量，无需传日期
-   - 需要 TUSHARE_TOKEN 的任务，若未配置要明确告知用户在 .env 中配置
+    标准顺序：["trade_calendar", "stock_basic", "daily_history_by_date",
+    "daily_basic", "moneyflow", "stk_factor", "cyq_perf"]（用户要求财务数据时追加
+    "income_statement", "balance_sheet", "cash_flow"）
+   - 财务三表（利润表/资产负债表/现金流量表）走扶摇接口，按报告期自动增量，无需传日期
+   - 需要凭证的任务（扶摇 FUYAO_API_KEY、TickFlow TICKFLOW_API_KEY），
+    若未配置要明确告知用户在 .env 中配置
+   - 本项目不使用 Tushare，不要向用户提及 Tushare 或建议配置 TUSHARE_TOKEN
    - full_refresh 全量刷新代价大，执行前必须先征得用户同意
    - 数据更新完成后，如用户需要查询最新数据，提醒先构建大宽表刷新查询快照
 4. 大宽表：仅 18:00 后可构建，未到时间要如实转达原因；构建前可用 get_wide_table_status

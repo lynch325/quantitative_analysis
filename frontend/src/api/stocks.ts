@@ -7,6 +7,8 @@ export function fetchStocks(params: {
   industry?: string
   area?: string
   search?: string
+  sort_by?: string
+  sort_order?: 'asc' | 'desc'
 }): Promise<StockListData> {
   return apiGet<StockListData>('/stocks', params)
 }

@@ -71,9 +71,12 @@
 }
 
 body {
+  /* 与 tailwind.config.ts 的 font-sans 完全一致：两套栈并存会让切路由时字重跳变 */
   font-family:
-    -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC',
-    'Hiragino Sans GB', 'Microsoft YaHei', sans-serif;
+    Inter, 'PingFang SC', 'HarmonyOS Sans SC', 'Microsoft YaHei', 'Noto Sans SC',
+    system-ui, sans-serif;
+  /* 中文正文行高：此前未设置，落到 Bootstrap reboot 的 1.5，中文偏挤 */
+  line-height: 1.65;
   background: var(--bg);
   background-image:
     radial-gradient(1100px 460px at 85% -10%, var(--accent-soft), transparent 60%),
@@ -124,12 +127,13 @@ body {
 .brand-text {
   font-weight: 700;
   font-size: 15px;
-  line-height: 1.15;
+  /* 中文品牌名，1.15 会挤压上下字面 */
+  line-height: 1.4;
 }
 
 .brand-text small {
   display: block;
-  font-size: 9.5px;
+  font-size: 11px;
   font-weight: 600;
   color: var(--text-faint);
   letter-spacing: 0.14em;
@@ -152,7 +156,7 @@ body {
 }
 
 .side-group-label {
-  font-size: 10.5px;
+  font-size: 11px;
   font-weight: 700;
   letter-spacing: 0.12em;
   text-transform: uppercase;
@@ -231,9 +235,19 @@ body {
 th.sortable {
   cursor: pointer;
   user-select: none;
+  white-space: nowrap;
 }
 th.sortable:hover {
   color: var(--accent);
+}
+/* 未排序时的可点击提示：默认弱化，hover 时变明显 */
+th.sortable .sort-hint {
+  opacity: 0.35;
+  font-size: 0.85em;
+  margin-left: 2px;
+}
+th.sortable:hover .sort-hint {
+  opacity: 0.85;
 }
 
 .sidebar-foot {
@@ -280,6 +294,78 @@ th.sortable:hover {
   color: var(--text);
   border-color: var(--accent);
 }
+
+/* 配色下拉：菜单相对 .sidebar-foot 向上弹出，避免被侧栏底部裁掉 */
+.scheme-select {
+  position: relative;
+}
+
+.scheme-select-trigger {
+  width: 100%;
+  justify-content: flex-start;
+  cursor: pointer;
+}
+
+.scheme-select-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.scheme-select-menu {
+  position: absolute;
+  bottom: calc(100% + 6px);
+  left: 0;
+  right: 0;
+  z-index: 40;
+  margin: 0;
+  padding: 4px;
+  list-style: none;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-strong);
+  background: var(--surface-2);
+  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.35);
+}
+
+.scheme-select-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 7px 9px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-dim);
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+
+.scheme-select-item:hover {
+  background: var(--surface-3);
+  color: var(--text);
+}
+
+.scheme-select-item.is-active {
+  color: var(--text);
+}
+
+.scheme-dot {
+  width: 12px;
+  height: 12px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  border: 1px solid var(--border-strong);
+}
+
+/* 圆点预览色与各自 CSS 变量块保持一致 */
+.scheme-dot-indigo { background: linear-gradient(135deg, #5b8def, #22b89b); }
+.scheme-dot-bloomberg { background: linear-gradient(135deg, #000000 40%, #ff8000); }
+.scheme-dot-tradingview { background: linear-gradient(135deg, #131722 40%, #2962ff); }
+.scheme-dot-eikon { background: linear-gradient(135deg, #081529 40%, #ff7a00); }
+.scheme-dot-gold { background: linear-gradient(135deg, #141414 40%, #c9a227); }
 
 .app-body {
   margin-left: var(--shell-pad);
@@ -398,12 +484,13 @@ th.sortable:hover {
   font-weight: 750;
   font-variant-numeric: tabular-nums;
   letter-spacing: -0.01em;
-  line-height: 1.2;
+  /* 该值也用于中文文本（风险等级等），1.2 会挤压上下留白 */
+  line-height: 1.35;
 }
 
 .stat-label {
   margin-top: 4px;
-  font-size: 11.5px;
+  font-size: 12px;
   color: var(--text-dim);
   letter-spacing: 0.08em;
 }
@@ -497,7 +584,7 @@ th.sortable:hover {
 /* ============ 表单 ============ */
 
 .form-label {
-  font-size: 11.5px;
+  font-size: 12px;
   color: var(--text-dim);
   letter-spacing: 0.06em;
   margin-bottom: 5px;
@@ -547,7 +634,7 @@ th.sortable:hover {
   z-index: 2;
   background: var(--surface-2);
   color: var(--text-dim);
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 600;
   letter-spacing: 0.08em;
   text-align: left;
@@ -557,7 +644,7 @@ th.sortable:hover {
 }
 
 .data-table td {
-  padding: 9px 14px;
+  padding: 10px 14px;
   border-bottom: 1px solid var(--border);
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
@@ -982,7 +1069,8 @@ summary {
 }
 
 body {
-  background-image: radial-gradient(900px 400px at 78% -12%, rgba(91, 141, 239, 0.11), transparent 68%);
+  /* 用 accent-soft 而非写死蓝色：换配色后顶部光晕跟着走 */
+  background-image: radial-gradient(900px 400px at 78% -12%, var(--accent-soft), transparent 68%);
 }
 
 .app-sidebar {
@@ -1005,7 +1093,7 @@ body {
 
 .brand-text small { color: var(--accent); opacity: 0.75; }
 .side-group { margin-bottom: 9px; }
-.side-group-label { color: var(--text-faint); padding-left: 11px; font-size: 10px; }
+.side-group-label { color: var(--text-faint); padding-left: 11px; font-size: 11px; }
 .side-link { padding: 8px 11px; border-radius: 8px; }
 .side-link.active {
   background: linear-gradient(90deg, rgba(91, 141, 239, 0.2), rgba(34, 184, 155, 0.08));
@@ -1036,7 +1124,7 @@ body {
   align-items: center;
   gap: 8px;
   color: var(--text-faint);
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 700;
   letter-spacing: 0.14em;
 }
@@ -1046,7 +1134,7 @@ body {
 .hero p { max-width: 560px; font-size: 14px; }
 .hero-actions { display: flex; gap: 9px; flex-shrink: 0; }
 .hero-actions .btn { padding: 9px 15px; }
-.hero-meta { display: flex; gap: 22px; padding-top: 21px; color: var(--text-faint); font-size: 11px; }
+.hero-meta { display: flex; gap: 22px; padding-top: 21px; color: var(--text-faint); font-size: 12px; }
 .hero-meta strong { color: var(--text-dim); font-weight: 700; margin-right: 4px; }
 .accent-number { color: var(--accent); }
 .tile-grid { gap: 12px; }
@@ -1078,4 +1166,371 @@ body {
   .hero-actions { margin-top: 17px; }
   .hero-meta { gap: 13px; flex-wrap: wrap; }
   .hero h1 { font-size: 31px; }
+}
+
+/* ============================================================
+   股票池模块（左侧池列表 + 右侧成分表）
+   ============================================================ */
+.pool-layout {
+  display: grid;
+  grid-template-columns: 260px minmax(0, 1fr);
+  gap: 12px;
+  align-items: start;
+}
+
+@media (max-width: 900px) {
+  .pool-layout { grid-template-columns: 1fr; }
+}
+
+.pool-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.pool-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-dim);
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.pool-item:hover { background: var(--surface-2); color: var(--text); }
+.pool-item.active {
+  background: var(--accent-soft);
+  border-color: var(--border-strong);
+  color: var(--text);
+}
+
+.pool-item .name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pool-item .count { font-size: 12px; color: var(--text-faint); }
+.pool-search { max-width: 190px; }
+.pool-source { max-width: 170px; }
+.pool-extra { max-width: 96px; }
+
+.pool-check {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 12px;
+  color: var(--text-dim);
+}
+
+.pool-import {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  padding: 12px;
+  margin-bottom: 12px;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
+}
+
+/* 立体层次：两栏卡片抬起来 */
+.pool-layout > * {
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05), 0 12px 28px -14px rgba(0, 0, 0, 0.22);
+}
+
+.pool-item.active {
+  border-left: 3px solid var(--accent, #4a90d9);
+  font-weight: 600;
+}
+
+.pool-notice { margin-bottom: 12px; }
+
+/* 左栏第二级：来源维度（池 → 来源） */
+.pool-source-block {
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+}
+
+.pool-subtitle {
+  font-size: 12px;
+  color: var(--text-faint);
+  letter-spacing: 0.06em;
+  margin-bottom: 6px;
+  padding-left: 2px;
+}
+
+.pool-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding-bottom: 10px;
+  margin-bottom: 10px;
+  border-bottom: 1px solid var(--border);
+}
+
+.pool-search-box {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+}
+
+.pool-search-box svg { color: var(--text-faint); flex: none; }
+
+.pool-search-box input {
+  border: none;
+  background: transparent;
+  box-shadow: none;
+  padding-left: 0;
+  width: 170px;
+}
+
+.pool-search-box input:focus { box-shadow: none; }
+
+.pool-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+
+.pool-chip {
+  padding: 3px 11px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-dim);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.pool-chip:hover { color: var(--text); border-color: var(--border-strong); }
+.pool-chip.active {
+  background: var(--accent-soft);
+  border-color: var(--border-strong);
+  color: var(--text);
+  font-weight: 600;
+}
+
+.pool-chips-sub { margin-bottom: 8px; }
+
+.pool-sector-tools {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.pool-sector-tools .form-select { max-width: 150px; }
+
+.pool-sector-list {
+  max-height: 260px;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  padding: 4px;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  gap: 4px;
+}
+
+.pool-sector-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  padding: 6px 9px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-dim);
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.pool-sector-item:hover { background: var(--surface-2); color: var(--text); }
+.pool-sector-item.active {
+  background: var(--accent-soft);
+  border-color: var(--border-strong);
+  color: var(--text);
+  font-weight: 600;
+}
+
+.pool-sector-item .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pool-sector-item .count { font-size: 12px; color: var(--text-faint); flex: none; }
+.pool-empty-hint { padding: 14px; text-align: center; color: var(--text-faint); font-size: 12px; }
+
+.pool-import-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.pool-close { padding: 2px 6px; }
+
+.pool-import-foot {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+}
+
+.pool-hint { font-size: 12px; color: var(--text-faint); }
+
+.pool-table-wrap {
+  max-height: 560px;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+
+.pool-table-wrap table { margin-bottom: 0; }
+.pool-table-wrap thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--surface-2);
+  box-shadow: inset 0 -1px 0 var(--border);
+}
+.pool-table-wrap tbody tr:hover { background: var(--surface-2); }
+
+/* ============ 配色方案（旧体系变量） ============
+ * 附加在文件末尾：theme.css 后半段有第二次 :root 覆盖，scheme 块必须排在其后
+ * 才能生效。涨跌色 --up/--down 不覆盖，固定 A 股口径红涨绿跌。
+ */
+
+[data-scheme='bloomberg'] {
+  --bg: #000000;
+  --surface: #0d0d0d;
+  --surface-2: #141414;
+  --surface-3: #1c1c1c;
+  --border: rgba(255, 255, 255, 0.1);
+  --border-strong: rgba(255, 255, 255, 0.2);
+  --text: #f2f0eb;
+  --text-dim: #a9a49a;
+  --text-faint: #6f6a61;
+  --accent: #ff8000;
+  --accent-2: #00aeef;
+  --accent-soft: rgba(255, 128, 0, 0.14);
+}
+
+[data-theme='light'][data-scheme='bloomberg'] {
+  --bg: #f7f7f7;
+  --surface: #ffffff;
+  --surface-2: #f0f0f0;
+  --surface-3: #e8e8e8;
+  --border: rgba(0, 0, 0, 0.09);
+  --border-strong: rgba(0, 0, 0, 0.18);
+  --text: #1a1a1a;
+  --text-dim: #525252;
+  --text-faint: #808080;
+  --accent: #d96600;
+  --accent-2: #0369a1;
+  --accent-soft: rgba(217, 102, 0, 0.1);
+}
+
+[data-scheme='tradingview'] {
+  --bg: #131722;
+  --surface: #1e222d;
+  --surface-2: #262b36;
+  --surface-3: #2f3542;
+  --border: rgba(255, 255, 255, 0.09);
+  --border-strong: rgba(255, 255, 255, 0.18);
+  --text: #d1d4dc;
+  --text-dim: #9598a1;
+  --text-faint: #6a6d78;
+  --accent: #2962ff;
+  --accent-2: #26a69a;
+  --accent-soft: rgba(41, 98, 255, 0.16);
+}
+
+[data-theme='light'][data-scheme='tradingview'] {
+  --bg: #f4f6f8;
+  --surface: #ffffff;
+  --surface-2: #eef1f5;
+  --surface-3: #e4e9f0;
+  --border: rgba(15, 23, 42, 0.09);
+  --border-strong: rgba(15, 23, 42, 0.18);
+  --text: #1e222d;
+  --text-dim: #50535e;
+  --text-faint: #787b86;
+  --accent: #1e53e5;
+  --accent-2: #0f8b7e;
+  --accent-soft: rgba(30, 83, 229, 0.1);
+}
+
+[data-scheme='eikon'] {
+  --bg: #081529;
+  --surface: #0f2138;
+  --surface-2: #162c47;
+  --surface-3: #1d3757;
+  --border: rgba(255, 255, 255, 0.1);
+  --border-strong: rgba(255, 255, 255, 0.2);
+  --text: #e6edf7;
+  --text-dim: #a3b3cb;
+  --text-faint: #6d7f9c;
+  --accent: #ff7a00;
+  --accent-2: #22b8b8;
+  --accent-soft: rgba(255, 122, 0, 0.15);
+}
+
+[data-theme='light'][data-scheme='eikon'] {
+  --bg: #f5f7fa;
+  --surface: #ffffff;
+  --surface-2: #eef2f7;
+  --surface-3: #e3eaf3;
+  --border: rgba(15, 23, 42, 0.09);
+  --border-strong: rgba(15, 23, 42, 0.18);
+  --text: #16233a;
+  --text-dim: #4a5b76;
+  --text-faint: #75839a;
+  --accent: #d95e00;
+  --accent-2: #0e7490;
+  --accent-soft: rgba(217, 94, 0, 0.1);
+}
+
+[data-scheme='gold'] {
+  --bg: #141414;
+  --surface: #1a1a1a;
+  --surface-2: #212121;
+  --surface-3: #2a2a2a;
+  --border: rgba(255, 255, 255, 0.09);
+  --border-strong: rgba(255, 255, 255, 0.18);
+  --text: #f0ece0;
+  --text-dim: #a9a49a;
+  --text-faint: #6f6a61;
+  --accent: #c9a227;
+  --accent-2: #4ea8a0;
+  --accent-soft: rgba(201, 162, 39, 0.14);
+}
+
+[data-theme='light'][data-scheme='gold'] {
+  --bg: #faf8f2;
+  --surface: #ffffff;
+  --surface-2: #f3efe4;
+  --surface-3: #eae4d6;
+  --border: rgba(15, 23, 42, 0.09);
+  --border-strong: rgba(15, 23, 42, 0.18);
+  --text: #22201a;
+  --text-dim: #565046;
+  --text-faint: #7d766a;
+  --accent: #a07d16;
+  --accent-2: #0f766e;
+  --accent-soft: rgba(160, 125, 22, 0.1);
 }

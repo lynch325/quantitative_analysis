@@ -230,7 +230,8 @@ export default function WatchlistPage() {
                 {rows.map((row) => (
                   <tr key={row.ts_code} className="border-t border-line/60 hover:bg-elevated/50">
                     <td className="px-3 py-1.5">
-                      <StockLink code={row.ts_code} name={row.name} />
+                      {/* 名称由下一列单独渲染，这里只出代码，避免同表重复 */}
+                      <StockLink code={row.ts_code} name={row.name} showName={false} />
                     </td>
                     <td className="px-3 py-1.5 text-fg-secondary">
                       <StockLink code={row.ts_code} name={row.name} showCode={false} />

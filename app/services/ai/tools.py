@@ -53,19 +53,9 @@ def _resolve_data_dir() -> Path:
     return path
 
 
-def _tushare_token_configured() -> bool:
-    token = (os.getenv('TUSHARE_TOKEN') or '').strip()
-    return token not in ('', 'your_tushare_token')
-
-
 # 数据源 source_name → (环境变量, 未配置时的提示)
 # derived 等本地计算 source 不在映射内，无需凭证。
 _SOURCE_TOKEN_REQUIREMENTS = {
-    'tushare': (
-        'TUSHARE_TOKEN',
-        '该任务需要 Tushare 数据源，但尚未配置 TUSHARE_TOKEN。'
-        '请在项目根目录 .env 中设置 TUSHARE_TOKEN 后重启服务再试',
-    ),
     'fuyao': (
         'FUYAO_API_KEY',
         '该任务需要扶摇数据源，但尚未配置 FUYAO_API_KEY。'
@@ -78,7 +68,7 @@ _SOURCE_TOKEN_REQUIREMENTS = {
     ),
 }
 
-_TOKEN_PLACEHOLDERS = ('', 'your_tushare_token')
+_TOKEN_PLACEHOLDERS = ('',)
 
 
 def _source_token_configured(source_name: str) -> bool:
@@ -87,6 +77,15 @@ def _source_token_configured(source_name: str) -> bool:
         return True
     value = (os.getenv(requirement[0]) or '').strip()
     return value not in _TOKEN_PLACEHOLDERS
+
+
+def source_token_status() -> Dict[str, bool]:
+    """各需要凭证的数据源是否已配置（供状态接口与 AI 工作台展示）。
+
+    唯一事实来源：新增/删除数据源只需改 _SOURCE_TOKEN_REQUIREMENTS，
+    调用方（list_data_jobs、assistant_service.status）自动跟随。
+    """
+    return {name: _source_token_configured(name) for name in _SOURCE_TOKEN_REQUIREMENTS}
 
 
 # ----------------------------------------------------------------------
@@ -149,6 +148,11 @@ def reset_singletons():
 # ----------------------------------------------------------------------
 
 def _tool_query_data(args: Dict[str, Any]) -> Dict[str, Any]:
+    """执行 Text2SQL 查询并把结果裁剪后交给模型。
+
+    **结果超过 MAX_ROWS_FOR_LLM 时只返回前 N 行**，并附带 note 提示改用聚合查询或加 LIMIT：
+    不裁剪会把整表塞进上下文，既超长又昂贵。SQL 为空或执行失败抛 ToolError。
+    """
     sql = (args.get('sql') or '').strip()
     if not sql:
         raise ToolError('sql 参数不能为空')
@@ -172,6 +176,11 @@ def _tool_query_data(args: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _describe_source_parquet(filename: str) -> Dict[str, Any]:
+    """读取单个 parquet 文件的元信息（是否存在 / 行数 / 最新交易日）。
+
+    只读 trade_date 一列，不为拿行数把整表读进内存；
+    读取失败只把错误塞进返回值，不让单个坏文件拖垮整个目录接口。
+    """
     info: Dict[str, Any] = {'exists': False, 'row_count': None, 'latest_trade_date': None}
     path = _resolve_data_dir() / filename
     if not path.exists():
@@ -190,6 +199,10 @@ def _describe_source_parquet(filename: str) -> Dict[str, Any]:
 
 
 def _tool_list_data_tables(_args: Dict[str, Any]) -> Dict[str, Any]:
+    """列出可查询的表（表名 / 来源文件 / 列清单 / 是否存在 / 最新交易日）以及分区数据集清单。
+
+    分区数据集的最新日期是给模型推导增量窗口 start_date / end_date 用的。
+    """
     from app.services.text2sql_engine import QueryExecutor
     from app.services.wide_table_status import get_wide_table_status
 
@@ -276,6 +289,11 @@ def _latest_open_trade_date() -> Optional[str]:
 
 
 def _tool_get_table_schema(args: Dict[str, Any]) -> Dict[str, Any]:
+    """取指定表的列清单，并附 5 行样例数据。
+
+    样例是刻意的：模型据此确认 trade_date 的真实格式（YYYYMMDD 还是 YYYY-MM-DD）与单位，
+    只看列名很容易猜错。未知表名抛 ToolError，并列出可用表供模型改正。
+    """
     from app.services.text2sql_engine import QueryExecutor
 
     table = (args.get('table') or '').strip()
@@ -303,6 +321,11 @@ def _data_job_execution_mode() -> str:
 
 
 def _tool_list_data_jobs(_args: Dict[str, Any]) -> Dict[str, Any]:
+    """列出可用数据任务及其依赖、是否需要凭证、是否危险操作。
+
+    needs_token 表示「该任务的数据源尚未配置凭证」；
+    同时回传各数据源凭证状态与当前执行模式，便于模型判断能否提交。
+    """
     from app.services.data_jobs.registry import JobRegistry
 
     jobs = []
@@ -314,7 +337,8 @@ def _tool_list_data_jobs(_args: Dict[str, Any]) -> Dict[str, Any]:
                 'group': definition.group,
                 'description': definition.description,
                 'dependencies': list(definition.dependencies or []),
-                'needs_tushare_token': definition.source_name == 'tushare',
+                'needs_token': not _source_token_configured(definition.source_name),
+                'required_env': (_SOURCE_TOKEN_REQUIREMENTS.get(definition.source_name) or (None,))[0],
                 'source_name': definition.source_name,
                 'dangerous': bool(definition.dangerous),
                 'visible': definition.job_type in JobRegistry()._visible_job_types,
@@ -322,12 +346,16 @@ def _tool_list_data_jobs(_args: Dict[str, Any]) -> Dict[str, Any]:
         )
     return {
         'jobs': jobs,
-        'tushare_token_configured': _tushare_token_configured(),
+        'source_tokens_configured': source_token_status(),
         'execution_mode': _data_job_execution_mode(),
     }
 
 
 def _tool_get_data_job_status(args: Dict[str, Any]) -> Dict[str, Any]:
+    """按 run_id 查任务运行状态。
+
+    缺参、非整数、记录不存在都抛 ToolError 并带可读提示，让模型能自行纠正参数。
+    """
     run_id = args.get('run_id')
     if run_id is None:
         raise ToolError('缺少 run_id 参数')
@@ -362,6 +390,11 @@ def _tool_list_ml_models(_args: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _tool_get_ml_training_status(args: Dict[str, Any]) -> Dict[str, Any]:
+    """按 job_id 查训练进度快照。
+
+    **训练任务记录只存在进程内存里**，服务重启后查不到 —— 错误信息里写明了这点，
+    避免模型误以为参数写错而反复重试。
+    """
     job_id = (args.get('job_id') or '').strip()
     if not job_id:
         raise ToolError('缺少 job_id 参数')
@@ -423,6 +456,11 @@ def _run_single_job(job_type: str, params: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _tool_run_data_job(args: Dict[str, Any]) -> Dict[str, Any]:
+    """提交数据任务并返回运行结果。
+
+    params 只放行 _ALLOWED_JOB_PARAMS 白名单内的键（防模型传任意参数）；
+    full_refresh 强制转 bool（模型常传字符串 true/false）。
+    """
     job_type = (args.get('job_type') or '').strip()
     if not job_type:
         raise ToolError('缺少 job_type 参数，请先调用 list_data_jobs 查看可用任务')
@@ -470,6 +508,12 @@ def _tool_run_data_jobs(args: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _tool_build_wide_table(_args: Dict[str, Any]) -> Dict[str, Any]:
+    """构建大宽表，返回 run_id 供轮询进度。
+
+    **18:00 前置校验**：未过 18:00 时数据源可能尚未下载完，直接抛 ToolError 并附当前宽表日期。
+    构建成功后**必须失效两层缓存**（data_reader 的股票业务缓存 + Text2SQL 执行器缓存），
+    否则后续查询仍读到旧宽表。
+    """
     from app.services.wide_table_status import get_wide_table_status
 
     status = get_wide_table_status(str(_resolve_data_dir()))
@@ -512,6 +556,11 @@ def _normalize_trade_date(raw: str) -> str:
 
 
 def _tool_calculate_factors(args: Dict[str, Any]) -> Dict[str, Any]:
+    """计算因子并落盘。
+
+    传了 factor_ids 就逐个计算，**单个因子失败不中断整批**（结果里逐条带 error）；
+    不传则计算全量因子。日期先经 _normalize_trade_date 归一。
+    """
     trade_date = _normalize_trade_date(args.get('trade_date'))
     factor_ids = args.get('factor_ids') or []
     ts_codes = args.get('ts_codes') or []
@@ -555,6 +604,12 @@ def _tool_calculate_factors(args: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _tool_create_custom_factor(args: Dict[str, Any]) -> Dict[str, Any]:
+    """创建自定义因子定义。
+
+    公式必须通过 validate_custom_factor_formula 的白名单校验，不通过直接抛 ToolError ——
+    表达式白名单是「不让模型生成可执行代码」的边界。
+    返回值明确提示还需调 calculate_factors 才能生成因子值。
+    """
     factor_id = (args.get('factor_id') or '').strip()
     factor_name = (args.get('factor_name') or '').strip()
     formula = (args.get('factor_formula') or '').strip()
@@ -585,6 +640,10 @@ def _tool_create_custom_factor(args: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _tool_train_ml_model(args: Dict[str, Any]) -> Dict[str, Any]:
+    """提交模型训练任务（异步），返回 job_id 供轮询。
+
+    日期窗口会由服务层按实际可用数据裁剪，date_range_adjusted 标记是否被调整过。
+    """
     model_id = (args.get('model_id') or '').strip()
     if not model_id:
         raise ToolError('缺少 model_id 参数，可先调用 list_ml_models 查看已有模型')
@@ -603,6 +662,11 @@ def _tool_train_ml_model(args: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _tool_predict_ml_model(args: Dict[str, Any]) -> Dict[str, Any]:
+    """用指定模型做预测并按分数列降序返回。
+
+    分数列名在不同模型间不一致（probability_score / predicted_return / prediction / score），
+    这里按优先级探测；预测为空时抛 ToolError 并提示「可能模型未训练，或该交易日因子缺失」。
+    """
     from app.services.ml_models import MLModelManager
 
     model_id = (args.get('model_id') or '').strip()
@@ -648,6 +712,10 @@ class AiTool:
         self.handler = handler
 
     def to_spec(self) -> Dict[str, Any]:
+        """转成 OpenAI 函数调用格式的 spec（type / function / parameters），供请求体的 tools 字段使用。
+
+        改这里的结构会同时影响下发给模型的工具说明与模型回传的调用参数形态。
+        """
         return {
             'type': 'function',
             'function': {

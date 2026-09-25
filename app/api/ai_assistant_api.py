@@ -40,6 +40,8 @@ def list_sessions():
 
 @ai_assistant_bp.route('/sessions', methods=['POST'])
 def create_session():
+    """POST 新建 AI 会话，成功返回 201 + 会话对象（前端拿 id 后往该会话发消息）。
+    """
     payload = request.get_json(silent=True) or {}
     try:
         session = AssistantService().create_session(payload.get('title'))
@@ -51,6 +53,9 @@ def create_session():
 
 @ai_assistant_bp.route('/sessions/<int:session_id>', methods=['DELETE'])
 def delete_session(session_id):
+    """DELETE 会话；会话不存在返回 404 —— 让前端能区分「删掉了」与「本来就没有」，
+    而不是统一当成功。
+    """
     try:
         deleted = AssistantService().delete_session(session_id)
         if not deleted:
@@ -62,6 +67,8 @@ def delete_session(session_id):
 
 @ai_assistant_bp.route('/sessions/<int:session_id>/messages', methods=['GET'])
 def session_messages(session_id):
+    """GET 会话消息（默认最近 200 条，可用 limit 调整），按时间正序返回供对话区直接渲染。
+    """
     try:
         limit = int(request.args.get('limit', 200))
         return jsonify({'success': True, 'messages': AssistantService().get_messages(session_id, limit)})

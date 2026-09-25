@@ -240,6 +240,11 @@ class BoardMarketService:
 
     @staticmethod
     def _normalize_down_pool_items(items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """把同花顺跌停池的原始字段转成项目内命名。
+
+        thscode → ts_code、price_change_ratio_pct → pct_chg 这类映射属于**外部数据源契约**，
+        改动等于同时改前端字段，需与前端一起升级。
+        """
         return [
             {
                 "ts_code": row.get("thscode"),
@@ -256,6 +261,8 @@ class BoardMarketService:
 
     @staticmethod
     def _normalize_break_pool_items(items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """把同花顺炸板池的原始字段转成项目内命名（含开板次数 open_times）。
+        """
         return [
             {
                 "ts_code": row.get("thscode"),
@@ -371,6 +378,10 @@ class BoardMarketService:
 
     @staticmethod
     def _normalize_hot_items(items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """把同花顺人气榜的原始字段转成项目内命名。
+
+        heat 显式转 float，转不动就置 None —— 外部数据常混字符串，直接透传会让前端排序报错。
+        """
         normalized = []
         for row in items:
             try:
@@ -547,6 +558,8 @@ class BoardMarketService:
 
     @staticmethod
     def _normalize_anomaly_items(items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """把同花顺异动的原始字段转成项目内命名（keywords 缺失兜底为空列表）。
+        """
         return [
             {
                 "ts_code": row.get("thscode"),
@@ -656,6 +669,11 @@ class BoardMarketService:
         return payload
 
     def _get_catalog(self, tag: str) -> List[Dict[str, Any]]:
+        """取同花顺指数目录，并做进程内缓存。
+
+        CATALOG_FRESH_SECONDS 内的缓存直接复用；
+        目录为空视为数据源异常抛 FuyaoError，且**不把空目录写进缓存** —— 否则一次抖动会污染整个缓存周期。
+        """
         with self._lock:
             cached = self._catalog_cache.get(tag)
         if cached and time.monotonic() - cached[0] < CATALOG_FRESH_SECONDS:
@@ -756,6 +774,10 @@ class BoardMarketService:
 
     @staticmethod
     def _validate_date(date: Optional[str]) -> Optional[str]:
+        """校验 YYYYMMDD 日期串：空值放行返回 None，格式错误抛 ValueError。
+
+        刻意区分「没传」与「传错」：前者按最新交易日处理，后者必须让调用方看到错误而不是静默兜底。
+        """
         if date is None or str(date).strip() == "":
             return None
         text = str(date).strip()

@@ -1,3 +1,10 @@
+"""数据任务状态存储的兼容包装。
+
+历史代码按 `DataJobStateStore` 的方法名调用，实际实现已统一到
+`ParquetDataJobStateStore`（Parquet 两表：data_job_runs / data_job_cursors）。
+本类只做方法转发、不承载任何逻辑；新代码请直接依赖 ParquetDataJobStateStore。
+"""
+
 from typing import Any, Dict, Optional
 
 from app.services.data_jobs.parquet_state_store import ParquetDataJobStateStore
@@ -18,6 +25,8 @@ class DataJobStateStore:
         snapshot_tag: Optional[str] = None,
         progress_message: Optional[str] = None,
     ):
+        """建 run 的薄封装：转发给底层 state_store，便于替换实现或注入测试替身。
+        """
         return self.state_store.create_run(
             job_type=job_type,
             params=params,
@@ -41,6 +50,8 @@ class DataJobStateStore:
         error_message: Optional[str] = None,
         progress_message: Optional[str] = None,
     ):
+        """更新 run 状态的薄封装：转发给底层 state_store，便于替换实现或注入测试替身。
+        """
         return self.state_store.update_run_status(
             run,
             status,

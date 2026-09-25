@@ -1,7 +1,7 @@
-"""第三方数据源客户端（fuyao / tickflow）。
+"""第三方数据源客户端（fuyao / tickflow / tdx）。
 
 与 tushare（app/utils/db_utils.DatabaseUtils）完全独立：
-- 凭证各自独立（FUYAO_API_KEY / TICKFLOW_API_KEY）
+- 凭证各自独立（FUYAO_API_KEY / TICKFLOW_API_KEY）；tdx 走本地 Go 服务，无凭证
 - 归一化到与 tushare 相同的 Parquet 表口径（fuyao_normalize），
   数据源只是同一张表的可替换生产者
 """
@@ -20,6 +20,11 @@ from app.utils.data_sources.fuyao_normalize import (
     financial_items_to_frame,
     snapshot_rows_to_quote_frame,
     snapshot_rows_to_stock_basic,
+)
+from app.utils.data_sources.tdx_client import (
+    TdxClient,
+    TdxError,
+    get_tdx_client,
 )
 from app.utils.data_sources.tickflow_client import (
     API_KEY_ENV as TICKFLOW_API_KEY_ENV,
@@ -41,6 +46,9 @@ __all__ = [
     "financial_items_to_frame",
     "snapshot_rows_to_quote_frame",
     "snapshot_rows_to_stock_basic",
+    "TdxClient",
+    "TdxError",
+    "get_tdx_client",
     "TickflowClient",
     "TickflowError",
     "TICKFLOW_API_KEY_ENV",

@@ -1,3 +1,24 @@
+"""回测验证引擎：按策略配置在历史行情上模拟调仓，输出净值曲线与绩效指标。
+
+主流程：逐调仓日 → 取选股结果（因子打分或 ML 预测）→ 组合优化求目标权重
+→ 下一交易日（t+1 收盘）撮合成交 → 记录持仓 / 换手 / 净值 → 汇总绩效。
+
+必须守住的三条正确性约定（改动前先确认影响）：
+- **t+1 执行**：信号在 t 日收盘后产生，只能在下一个交易日成交（_next_trade_date），
+  当日成交即引入未来函数；
+- **可交易性**：当日无行情（停牌）不买入且持仓保留、涨停不买入、跌停不卖出，
+  由 _get_execution_snapshot 按当日行情与涨跌停幅度判定；
+- **无前视**：组合优化的协方差按调仓日截断估计（as_of_date），
+  财务类因子按公告日打点（见 FactorEngine 的说明）。
+
+文件下半部分的 `_build_*` / `_normalize_*` 是**纯格式化层**：把内部结构转成
+前端直接消费的 payload（净值 / 回撤 / 月度收益 / 收益分布 / 持仓与行业分布 /
+风险指标 / 执行假设），不在其中做业务计算——改字段名需与前端同步。
+
+性能与调用：全量回测是分钟级同步任务，由 API 后台线程或数据任务触发，
+不要放进请求-响应的必经路径。
+"""
+
 import pandas as pd
 import numpy as np
 from typing import List, Dict, Any, Optional, Tuple
@@ -16,6 +37,11 @@ class BacktestEngine:
     """回测验证引擎"""
     
     def __init__(self):
+        """建立数据读取器与状态库；重依赖（因子/ML/打分/优化器）延迟创建。
+
+        延迟的目的：只读历史回测结果的 API 进程不必加载 FactorEngine /
+        MLModelManager 这些重对象（见 _get_* 系列）。
+        """
         self.factor_engine = None
         self.ml_manager = None
         self.scoring_engine = None
@@ -1115,6 +1141,11 @@ class BacktestEngine:
         benchmark_returns: List[Dict[str, Any]],
         initial_capital: float,
     ) -> List[Dict[str, Any]]:
+        """逐日净值曲线：组合市值 / 初始资金，并按日期贴上基准净值。
+
+        基准缺该日期时不补值（返回 None），前端据此断线；initial_capital 为 0
+        时组合净值返回 None 而不是抛 ZeroDivisionError。
+        """
         benchmark_map = {row['date']: row.get('value') for row in benchmark_returns}
         return [
             {
@@ -1126,6 +1157,11 @@ class BacktestEngine:
         ]
 
     def _build_drawdown_series(self, portfolio_values: List[Dict[str, Any]], initial_capital: float) -> List[Dict[str, Any]]:
+        """逐日回撤序列（相对历史最高市值的比例，≤ 0）。
+
+        峰值初值取 initial_capital，因此「开局即亏损」也计入回撤（与常见
+        只看曲线内最高点的口径不同，改动会影响前端回撤图读数）。
+        """
         data = []
         max_value = initial_capital
         for item in portfolio_values:
@@ -1140,6 +1176,11 @@ class BacktestEngine:
         portfolio_values: List[Dict[str, Any]],
         benchmark_returns: List[Dict[str, Any]],
     ) -> List[Dict[str, Any]]:
+        """按自然月聚合的月度收益：月内每日收益连乘再减 1。
+
+        基准侧只在两端都有净值时才计入（否则该月基准为 None）；
+        组合市值序列少于 2 个点（无法算收益）时返回空列表。
+        """
         if len(portfolio_values) < 2:
             return []
 
@@ -1176,6 +1217,11 @@ class BacktestEngine:
         return results
 
     def _build_returns_distribution(self, daily_returns: List[float]) -> List[Dict[str, Any]]:
+        """日收益直方分布：桶为 -10%~+10%、步长 1%，命中容差 ±0.5%。
+
+        超出 ±10% 的极端日（涨跌停附近的复权跳变等）不计入任何桶，
+        因此各桶计数之和可能小于样本数。
+        """
         if not daily_returns:
             return []
         bins = [i / 100 for i in range(-10, 11)]
@@ -1193,6 +1239,11 @@ class BacktestEngine:
         start_date: str,
         end_date: str,
     ) -> List[Dict[str, Any]]:
+        """期末持仓明细：取最后一日持仓，按期末价折算权重并补充名称/行业。
+
+        元数据缺失时 name 退化为 ts_code、industry 记为「未知」；
+        `return` 与 `contribution` 目前恒为 None（占位字段，前端另行展示）。
+        """
         if not daily_positions:
             return []
         last_positions = daily_positions[-1] or {}
@@ -1214,6 +1265,10 @@ class BacktestEngine:
         return positions
 
     def _build_industry_distribution(self, positions: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """按行业聚合持仓权重，权重降序返回（供饼图）。
+
+        行业缺失归入「未知」；权重为 None 的持仓按 0 计。
+        """
         industry_weights: Dict[str, float] = {}
         for position in positions:
             industry = position.get('industry') or '未知'
@@ -1224,6 +1279,10 @@ class BacktestEngine:
         ]
 
     def _build_risk_metrics(self, performance_metrics: Dict[str, Any]) -> Dict[str, Any]:
+        """从绩效指标中挑出风险类字段（VaR/CVaR/beta/alpha/IR/Calmar）。
+
+        纯字段搬运，缺失即 None；指标本身的计算在 _calculate_performance_metrics。
+        """
         return {
             'var_95': performance_metrics.get('var_95'),
             'cvar_95': performance_metrics.get('cvar_95'),
@@ -1234,6 +1293,12 @@ class BacktestEngine:
         }
 
     def _build_execution_assumptions(self, strategy_config: Dict[str, Any]) -> Dict[str, Any]:
+        """回测实际生效的费用与口径（佣金/滑点/印花税/基准/成交价）。
+
+        默认值：佣金 0.001、滑点 0、印花税取 Config.DEFAULT_STAMP_DUTY_RATE；
+        execution_price 恒为 next_trade_day_close，与引擎的 t+1 收盘成交一致——
+        前端展示的假设必须与这里同源，否则会出现"页面参数与实际回测不符"。
+        """
         return {
             'commission_rate': float(strategy_config.get('commission_rate', 0.001)),
             'slippage_rate': float(strategy_config.get('slippage_rate', 0.0)),
@@ -1258,6 +1323,11 @@ class BacktestEngine:
         }
 
     def _normalize_benchmark_returns(self, benchmark_returns: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """基准序列归一：缺 `value` 时用 `cumulative_return + 1` 补成净值。
+
+        注意 `cumulative_return` 是**累计收益率**（0.12 表示 +12%），不是净值；
+        两者都缺时该点 value 保持 None，下游按断点处理。
+        """
         normalized = []
         for row in benchmark_returns or []:
             item = dict(row)
@@ -1285,6 +1355,12 @@ class BacktestEngine:
         execution_assumptions: Optional[Dict[str, Any]] = None,
         trade_constraints: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
+        """组装回测响应的完整 payload（策略配置 / 区间 / 净值 / 回撤 / 月度收益 /
+        收益分布 / 持仓与行业分布 / 绩效与风险指标 / 执行假设 / 交易约束）。
+
+        `run_id` 用于关联已落库的回测记录；`execution_assumptions` 与
+        `trade_constraints` 省略时由 strategy_config 现算。纯组装、无业务计算。
+        """
         performance_metrics = dict(performance_metrics or {})
         benchmark_returns = self._normalize_benchmark_returns(benchmark_returns)
         if 'annualized_return' in performance_metrics and 'annual_return' not in performance_metrics:

@@ -1,3 +1,26 @@
+"""组合优化器：把截面预期收益转成目标权重。
+
+五种方法（见 PortfolioOptimizer.optimization_methods）：
+mean_variance / risk_parity / equal_weight / factor_neutral / black_litterman。
+
+三条跨方法的口径约定（回测与 API 共用同一实现，改动需同步评估）：
+- 预期收益的年化映射区间固定为 [-0.15, 0.30]（ANNUAL_EXPECTED_RETURN_*），
+  回测打分映射与 API 共用该区间，避免两处口径漂移；
+- 协方差默认用 LedoitWolf 收缩估计，lookback 252 交易日（按 1.6 倍折算日历天）；
+  价格先 ffill 再算收益——停牌日记 0 收益会同时压低方差与相关性，
+  使估计出虚假的低风险资产；
+- `as_of_date` 是前视偏差防线：回测必须传调仓日，只有缺省时才允许用当前日期；
+  `annualize_cov=True` 配合年化预期收益使用，否则目标函数里收益项与风险项
+  量纲相差三个数量级，优化会退化成只看收益的角点解。
+
+数值求解：均值方差走 cvxpy 二次规划，求解器按 (CLARABEL, SCS, OSQP) 依次
+探测已安装项（ECOS 自 cvxpy 1.5 起不再捆绑，硬指定会直接 SolverError）；
+cvxpy 缺失时 Black-Litterman 分支回落 `_heuristic_weight_optimization`。
+
+返回值统一为 dict：成功含权重映射，失败含 `error` 文案——调用方须按 error
+分支降级（回测里默认退回等权），不要假设一定拿得到权重。
+"""
+
 import pandas as pd
 import numpy as np
 from typing import List, Dict, Any, Optional

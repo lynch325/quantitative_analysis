@@ -41,6 +41,105 @@
   --ts-danger: 0 72% 48%;
 }
 
+/*
+ * 配色方案：只覆盖「底色层次 + 文字色温 + 强调色」。
+ * 涨跌色（--ts-bull/bear）不在这里覆盖 —— 固定 A 股口径红涨绿跌，
+ * 换配色后方向语义不变，避免误读。
+ */
+
+/* 彭博终端：纯黑底 + 琥珀橙主色 + 青蓝次色 */
+[data-scheme='bloomberg'] {
+  --ts-canvas: 0 0% 0%;
+  --ts-surface: 0 0% 5%;
+  --ts-elevated: 0 0% 9%;
+  --ts-border: 0 0% 22%;
+  --ts-fg-primary: 40 30% 92%;
+  --ts-fg-secondary: 36 18% 72%;
+  --ts-fg-muted: 36 12% 52%;
+  --ts-accent: 32 100% 50%;
+  --ts-warning: 45 100% 55%;
+}
+
+[data-theme='light'][data-scheme='bloomberg'] {
+  --ts-canvas: 0 0% 98%;
+  --ts-surface: 0 0% 100%;
+  --ts-elevated: 0 0% 96%;
+  --ts-border: 0 0% 85%;
+  --ts-fg-primary: 0 0% 12%;
+  --ts-fg-secondary: 0 0% 32%;
+  --ts-fg-muted: 0 0% 50%;
+  --ts-accent: 32 100% 45%;
+}
+
+/* TradingView：深蓝灰 + 电光蓝 */
+[data-scheme='tradingview'] {
+  --ts-canvas: 224 28% 10%;
+  --ts-surface: 222 25% 13%;
+  --ts-elevated: 222 24% 17%;
+  --ts-border: 222 20% 26%;
+  --ts-fg-primary: 210 17% 92%;
+  --ts-fg-secondary: 213 12% 70%;
+  --ts-fg-muted: 215 10% 50%;
+  --ts-accent: 224 100% 58%;
+}
+
+[data-theme='light'][data-scheme='tradingview'] {
+  --ts-canvas: 210 20% 98%;
+  --ts-surface: 0 0% 100%;
+  --ts-elevated: 210 20% 96%;
+  --ts-border: 214 15% 88%;
+  --ts-fg-primary: 0 0% 20%;
+  --ts-fg-secondary: 0 0% 35%;
+  --ts-fg-muted: 0 0% 50%;
+  --ts-accent: 224 100% 55%;
+}
+
+/* 路透 Eikon：深海军蓝 + 橙 */
+[data-scheme='eikon'] {
+  --ts-canvas: 219 70% 7%;
+  --ts-surface: 219 62% 11%;
+  --ts-elevated: 219 55% 15%;
+  --ts-border: 219 40% 25%;
+  --ts-fg-primary: 210 25% 92%;
+  --ts-fg-secondary: 210 18% 72%;
+  --ts-fg-muted: 210 14% 52%;
+  --ts-accent: 26 100% 50%;
+}
+
+[data-theme='light'][data-scheme='eikon'] {
+  --ts-canvas: 214 30% 98%;
+  --ts-surface: 0 0% 100%;
+  --ts-elevated: 214 25% 96%;
+  --ts-border: 214 20% 88%;
+  --ts-fg-primary: 210 25% 15%;
+  --ts-fg-secondary: 210 15% 35%;
+  --ts-fg-muted: 210 12% 50%;
+  --ts-accent: 26 100% 45%;
+}
+
+/* 暗金：近黑 + 金 */
+[data-scheme='gold'] {
+  --ts-canvas: 0 0% 8%;
+  --ts-surface: 0 0% 11%;
+  --ts-elevated: 0 0% 15%;
+  --ts-border: 0 0% 24%;
+  --ts-fg-primary: 45 20% 92%;
+  --ts-fg-secondary: 45 14% 74%;
+  --ts-fg-muted: 45 10% 54%;
+  --ts-accent: 46 68% 47%;
+}
+
+[data-theme='light'][data-scheme='gold'] {
+  --ts-canvas: 45 12% 98%;
+  --ts-surface: 0 0% 100%;
+  --ts-elevated: 45 12% 96%;
+  --ts-border: 45 10% 86%;
+  --ts-fg-primary: 45 10% 15%;
+  --ts-fg-secondary: 45 8% 35%;
+  --ts-fg-muted: 45 6% 50%;
+  --ts-accent: 46 68% 40%;
+}
+
 @layer base {
   /* 新页面挂 .tsp-root，内部细滚动条 + 边框分层；不污染旧页面 */
   .tsp-root {
@@ -49,6 +148,14 @@
 
   .tsp-root * {
     border-color: hsl(var(--ts-border));
+  }
+
+  /* 表格行高：页面里 py-1.5 散落在 8 个文件 80+ 处，统一在此兜底。
+     选择器（类 + 元素）优先级高于工具类 .py-1.5，无需逐页改。 */
+  .tsp-root td,
+  .tsp-root th {
+    padding-top: 8px;
+    padding-bottom: 8px;
   }
 
   .tsp-root ::-webkit-scrollbar {

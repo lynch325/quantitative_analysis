@@ -21,6 +21,11 @@ _signal_engine_data_dir = None
 
 
 def get_signal_engine():
+    """惰性构造全局信号引擎单例。
+
+    被测用例注入的替身（不是 RealtimeTradingSignalEngine 实例）原样返回；
+    DATA_DIR 变化时重建引擎，避免继续读旧数据目录。
+    """
     global signal_engine, _signal_engine_data_dir
     current_data_dir = os.getenv("DATA_DIR")
 

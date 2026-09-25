@@ -4,7 +4,7 @@ Text2SQL API接口
 """
 
 import logging
-from flask import Blueprint, request, jsonify, render_template
+from flask import Blueprint, request, jsonify
 from app.services.text2sql_engine import get_text2sql_engine
 from app.services.sql_generator import validate_readonly_sql
 from app.models.text2sql_metadata import QueryHistory, QueryTemplate, BusinessDictionary
@@ -14,12 +14,6 @@ text2sql_bp = Blueprint('text2sql', __name__, url_prefix='/api/text2sql')
 
 # 配置日志
 logger = logging.getLogger(__name__)
-
-
-@text2sql_bp.route('/', methods=['GET'])
-def text2sql_page():
-    """Text2SQL页面"""
-    return render_template('text2sql/index.html')
 
 
 @text2sql_bp.route('/query', methods=['POST'])

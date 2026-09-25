@@ -27,6 +27,11 @@ REL_TABLE = "daily_history/daily"
 
 
 def main() -> int:
+    """作业入口：用 FuyaoDailyFetcher 批量拉取待补交易日的日线并写分区。
+
+    拉取结果按交易日逐个检查，空表日期收进 failed 列表最后统一报告，
+    不因个别日期缺失中断整批。
+    """
     trade_dates, _ = resolve_trade_dates_with_gap_fill(REL_TABLE)
     if not trade_dates:
         print("[daily_history_fuyao] 没有需要拉取的交易日")

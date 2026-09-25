@@ -4,7 +4,8 @@ import { rawDelete, rawGet } from './client'
 export interface AiStatus {
   llm: { configured: boolean; model?: string }
   config_hint?: string
-  tushare_token_configured: boolean
+  /** 各需凭证数据源的配置状态，键为 source_name（fuyao / tickflow） */
+  source_tokens_configured: Record<string, boolean>
   wide_table: { exists: boolean; wide_table_date?: string }
 }
 

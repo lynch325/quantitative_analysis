@@ -230,44 +230,16 @@ def get_market_heatmap():
 
 @realtime_monitor_bp.route('/top-movers', methods=['GET'])
 def get_top_movers():
-    """获取涨跌幅排行"""
+    """获取涨跌幅排行（全市场口径）"""
     try:
         limit = int(request.args.get('limit', 20))
         period_type = request.args.get('period_type', '5min')
-        
-        # 获取实时行情数据
-        quotes_result = monitor_service.get_realtime_quotes(
-            stock_codes=None,
-            period_type=period_type,
-            limit=100  # 获取更多数据用于排序
-        )
-        
-        if not quotes_result.get('success'):
-            return jsonify(quotes_result)
-        
-        quotes = quotes_result.get('data', {}).get('quotes', [])
-        
-        # 按涨跌幅排序
-        quotes.sort(key=lambda x: x['change_pct'], reverse=True)
-        
-        # 分别获取涨幅榜和跌幅榜
-        top_gainers = quotes[:limit]
-        top_losers = sorted(quotes, key=lambda x: x['change_pct'])[:limit]
-        
-        # 按成交量排序获取活跃股票
-        most_active = sorted(quotes, key=lambda x: x['volume'], reverse=True)[:limit]
-        
-        return jsonify({
-            'success': True,
-            'data': {
-                'top_gainers': top_gainers,
-                'top_losers': top_losers,
-                'most_active': most_active,
-                'update_time': quotes_result.get('data', {}).get('update_time')
-            },
-            'message': '获取涨跌幅排行成功'
-        })
-        
+
+        # 排序下沉到 service、候选池换成全市场快照：旧实现走
+        # get_realtime_quotes(limit=100)，而那里的 limit 语义是「取最活跃 N 只」，
+        # 导致榜单只在活跃股内部排名，漏掉成交额不在前列的涨跌幅前列个股
+        return jsonify(monitor_service.get_top_movers(limit=limit, period_type=period_type))
+
     except Exception as e:
         logger.error(f"获取涨跌幅排行失败: {str(e)}")
         return jsonify({'success': False, 'message': str(e)})

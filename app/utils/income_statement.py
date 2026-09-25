@@ -1,3 +1,11 @@
+"""数据作业：下载利润表（Tushare `income_vip`）→ `data/income_statement/`。
+
+`FIELDS` 是落盘白名单；落盘按 **end_date（报告期）分区**，与日频表不同。
+执行骨架与参数解析见 financial_vip.run_financial_vip_job。
+注意：registry 中 `income_statement` 现指向 `financial_fuyao.py`（扶摇源，
+写同一组表），本脚本是 Tushare VIP 版本。
+"""
+
 from financial_vip import run_financial_vip_job
 
 

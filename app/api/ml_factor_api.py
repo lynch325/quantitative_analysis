@@ -1,3 +1,24 @@
+"""机器学习与因子工作台接口（url_prefix=/api/ml-factor，共 37 个路由）。
+
+按领域分 6 组：
+- `factors/*`：因子计算、自定义因子与能力清单、覆盖率日期；
+- `models/*`：模型创建、训练、预测、评估、清单；
+- `scoring/*`：因子打分与 ML 打分的选股入口（含"最近可用交易日"探测）；
+- `analysis/*` 与 `factor/analysis/*`：绩效/有效性/IC/分位/相关性分析；
+- `batch/*`：一条龙「算因子→打分」「训练→预测」；
+- `portfolio/*` 与 `backtest/*`：组合优化、再平衡、回测与对比。
+
+实现注意：
+- 本文件是全仓最大的 API 模块（约 1900 行），部分路由内**直接同步做重计算**
+  （如 `/factors/calculate`、`/batch/*`：全市场算因子 + 落盘 + 打分），
+  会占住请求线程直到跑完；训练/回测类已改为提交后台任务后立即返回、
+  由前端轮询任务状态；
+- `scoring/latest-*` 与 `factors/latest-coverage-date` 用于让前端拿到「确实有
+  数据的交易日」：查不到时返回 400，而不是给空结果让页面误判为无信号；
+- 响应结构存在两种历史风格（`{code,message,data}` 与 `{success,...}`），
+  前端按接口分别处理，改造时不要单方面统一。
+"""
+
 from flask import Blueprint, request, jsonify
 from datetime import timedelta
 from app.utils.time_utils import now_local

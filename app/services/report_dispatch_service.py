@@ -1,3 +1,13 @@
+"""报告订阅分发：把到期的订阅生成为报告并记录分发结果。
+
+当前是**最小可用实现**：不接邮件/短信网关，只做「找待发送订阅 → 生成报告
+→ 更新订阅的发送时间 → 把分发信息写入报告与日志」四步，因此同一订阅靠
+订阅表自己的发送时间字段做节流（见 ReportSubscription.get_pending_subscriptions）。
+
+入口 dispatch_pending_subscriptions 不抛异常：单订阅失败与整体异常都收敛成
+`{success, dispatched, failed, results}` 结构返回，便于前端直接展示。
+"""
+
 from typing import Any, Dict, List, Optional
 
 from loguru import logger
@@ -20,6 +30,11 @@ class ReportDispatchService:
         self.generator = generator or RealtimeReportGenerator()
 
     def dispatch_pending_subscriptions(self) -> Dict[str, Any]:
+        """扫描待推送的订阅并逐个派发，返回成功/失败计数与逐条结果。
+
+        单条订阅失败不影响其余；顶层异常也被兜住返回 success=False ——
+        调用方是定时任务，异常抛出去只会变成无信息的调度错误。
+        """
         try:
             subscriptions = ReportSubscription.get_pending_subscriptions()
             results: List[Dict[str, Any]] = []
@@ -39,6 +54,11 @@ class ReportDispatchService:
             return {"success": False, "message": str(exc), "dispatched": 0, "failed": 0, "results": []}
 
     def _dispatch_subscription(self, subscription: ReportSubscription) -> Dict[str, Any]:
+        """派发生成并发送单条订阅。
+
+        模板不存在或生成失败都返回失败结构而不抛异常（调用方按批处理，一条失败不该中断整批）；
+        生成参数取自订阅的 schedule_config.parameters，让同一模板按订阅产出不同内容。
+        """
         template = subscription.template
         if template is None:
             return {"success": False, "subscription_id": subscription.id, "message": "模板不存在"}

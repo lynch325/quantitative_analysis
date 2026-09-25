@@ -1,3 +1,8 @@
+"""【已废弃】baostock 30 分钟线抓取 → `data/min30/daily/`（未注册、无读取方）。
+
+保留原因与恢复条件见紧随其后的 DEPRECATED 注释：日期区间硬编码、无视
+DATA_JOB_* 环境变量，且写入表没有消费方——实时分钟线走 `stock_minute/`。
+"""
 # DEPRECATED: 本脚本已从 data_jobs 注册表摘除。
 # 原因：日期区间硬编码、无视 DATA_JOB_* 环境变量，且写入的 min30/daily
 # 表没有任何读取方（实时分钟线走 stock_minute/，由通达信同步服务维护）。
@@ -14,6 +19,8 @@ def _to_bs_code(ts_code: str) -> str:
 
 
 def _fetch_minute(stock_code: str, start_date: str, end_date: str) -> pd.DataFrame:
+    """用 baostock 拉单只股票的 30 分钟 K 线（前复权），逐行迭代结果集拼表。
+    """
     rs = bs.query_history_k_data_plus(
         stock_code,
         "date,time,code,open,high,low,close,volume,amount",
@@ -29,6 +36,10 @@ def _fetch_minute(stock_code: str, start_date: str, end_date: str) -> pd.DataFra
 
 
 def main():
+    """作业入口：登录 baostock，按 stock_basic 清单逐只拉 30 分钟线并汇总落盘。
+
+    **窗口日期是写死的常量**（历史遗留脚本），stock_basic 为空时跳过。
+    """
     stock_list = get_stock_codes()
     if not stock_list:
         print("[min30] stock_basic.parquet is empty, skip.")

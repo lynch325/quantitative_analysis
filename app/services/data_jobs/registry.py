@@ -1,3 +1,19 @@
+"""数据作业注册表：`job_type` → JobDefinition（脚本路径 / 分组 / 依赖 / 数据源）。
+
+唯一真相源，新增或下线作业只改这里：
+- `_jobs` 是全集（含仅供内部调用的作业）；
+- `_visible_job_types` 控制「页面与 AI/API 可见」的作业集合——
+  两者需同步维护，只加 `_jobs` 不会出现在前端下拉里；
+- `recommended_order` 决定推荐执行顺序（list_visible_jobs 按它排序），
+  例：交易日历 → 基础资料 → 日线 → 衍生/宽表，顺序错会让下游算到空数据。
+
+历史上已摘除 `baostock_daily` 与 `min5/min15/min30/min60`：它们硬编码 2025 年
+日期区间、无视 DATA_JOB_* 参数，且写入的表无人读取（分钟线现由通达信同步
+服务维护 `stock_minute/`）——保留注册项只会让 AI/API 误提交无效作业。
+
+`get_job` 对未知 job_type 直接抛 KeyError（不做默认兜底）。
+"""
+
 from collections import defaultdict
 from typing import Dict, List, Set
 
@@ -13,13 +29,14 @@ class JobRegistry:
             "stock_basic",            # 1
             "stock_basic_fuyao",      # 1b（扶摇源股票清单刷新）
             "trade_calendar",         # 2
-            "stock_company",          # 3
             "daily_history_by_date",  # 5
             "daily_history_fuyao",    # 5b（扶摇源日线）
             "daily_basic",            # 6
             "moneyflow",              # 15
             "stk_factor",             # 17
+            "stk_factor_derived",     # 17b（本地日线自算，不依赖外部源）
             "cyq_perf",               # 18
+            "minute_sync_tickflow",   # 19（分钟线：TickFlow 日内分时）
             "wide_table_builder",     # 20
             "factor_compute",         # 因子计算（打分/回测的前置作业）
         }
@@ -32,12 +49,13 @@ class JobRegistry:
             "stock_basic": JobDefinition(
                 "stock_basic",
                 "基础资料",
-                "app/utils/stock_basic.py",
+                "app/utils/stock_basic_fuyao.py",
                 display_name="股票基础资料",
-                description="下载股票代码、简称、地域、行业和上市日期。",
+                description="刷新股票代码与名称清单（扶摇全市场快照）。",
                 recommended_order=2,
-                source_name="tushare",
-                source_mode="full",
+                source_name="fuyao",
+                source_mode="incremental",
+                supports_incremental=True,
             ),
             "stock_basic_fuyao": JobDefinition(
                 "stock_basic_fuyao",
@@ -53,56 +71,52 @@ class JobRegistry:
             "trade_calendar": JobDefinition(
                 "trade_calendar",
                 "基础资料",
-                "app/utils/trade_calendar.py",
+                "app/utils/trade_calendar_fuyao.py",
                 display_name="交易日历",
-                description="下载交易日、开市状态和前一交易日，是日频任务的基础依赖。",
+                description="下载交易日、开市状态和前一交易日，是日频任务的基础依赖（扶摇固定近一年窗口）。",
                 recommended_order=1,
-                source_name="tushare",
+                source_name="fuyao",
                 source_mode="incremental",
                 supports_incremental=True,
             ),
-            "stock_company": JobDefinition(
-                "stock_company",
-                "基础资料",
-                "app/utils/stock_company.py",
-                display_name="上市公司资料",
-                description="补充公司基本信息和上市主体信息。",
-                recommended_order=3,
-                source_name="tushare",
-                source_mode="full",
-            ),
+            # 注：原 stock_company（上市公司资料：董事长/总经理/注册资本等）
+            # 三个可用数据源均不提供，已移除注册，避免 AI/API 提交无源作业。
             "daily_history_by_code": JobDefinition(
                 "daily_history_by_code",
                 "日频行情与基本面",
-                "app/utils/daily_history_by_code.py",
+                "app/utils/daily_history_fuyao.py",
                 display_name="日线行情（按股票代码）",
                 description="按股票逐只下载日线行情，依赖股票基础资料。",
                 dependencies=["stock_basic"],
                 recommended_order=5,
-                source_name="tushare",
+                source_name="fuyao",
                 source_mode="incremental",
                 supports_incremental=True,
             ),
             "daily_history_by_date": JobDefinition(
                 "daily_history_by_date",
                 "日频行情与基本面",
-                "app/utils/daily_history_by_date.py",
+                "app/utils/daily_history_fuyao.py",
                 display_name="日线行情（按交易日）",
                 description="按交易日批量下载日线行情，适合初始化全市场日线数据。",
                 dependencies=["trade_calendar"],
                 recommended_order=4,
-                source_name="tushare",
+                source_name="fuyao",
                 source_mode="incremental",
                 supports_incremental=True,
             ),
             "daily_basic": JobDefinition(
                 "daily_basic",
                 "日频行情与基本面",
-                "app/utils/daily_basic.py",
+                "app/utils/daily_basic_fuyao.py",
                 display_name="日线基本指标",
-                description="下载换手率、市盈率、市值等日线基本面指标。",
+                description=(
+                    "日线基本面指标：收盘价与量比取自本地日线，总市值取自通达信数仓 GP16，"
+                    "pe_ttm/pb/ps_ttm 取自扶摇估值快照（仅最新交易日）。"
+                    "换手率/流通股本/股息率等无可用数据源，保持缺失。"
+                ),
                 recommended_order=6,
-                source_name="tushare",
+                source_name="fuyao",
                 source_mode="incremental",
                 supports_incremental=True,
             ),
@@ -119,23 +133,56 @@ class JobRegistry:
                 supports_incremental=True,
             ),
             "income_statement": JobDefinition(
-                "income_statement", "财务三表", "app/utils/income_statement.py", display_name="利润表", description="下载上市公司利润表。", dependencies=["stock_basic"], source_name="tushare", source_mode="incremental", supports_incremental=True
+                "income_statement", "财务三表", "app/utils/financial_fuyao.py", display_name="利润表", description="下载上市公司利润表（扶摇单标的接口，按报告期增量）。", dependencies=["stock_basic"], source_name="fuyao", source_mode="incremental", supports_incremental=True
             ),
             "balance_sheet": JobDefinition(
-                "balance_sheet", "财务三表", "app/utils/balance_sheet.py", display_name="资产负债表", description="下载上市公司资产负债表。", dependencies=["stock_basic"], source_name="tushare", source_mode="incremental", supports_incremental=True
+                "balance_sheet", "财务三表", "app/utils/financial_fuyao.py", display_name="资产负债表", description="下载上市公司资产负债表（扶摇单标的接口，按报告期增量）。", dependencies=["stock_basic"], source_name="fuyao", source_mode="incremental", supports_incremental=True
             ),
             "cash_flow": JobDefinition(
-                "cash_flow", "财务三表", "app/utils/cash_flow.py", display_name="现金流量表", description="下载上市公司现金流量表。", dependencies=["stock_basic"], source_name="tushare", source_mode="incremental", supports_incremental=True
+                "cash_flow", "财务三表", "app/utils/financial_fuyao.py", display_name="现金流量表", description="下载上市公司现金流量表（扶摇单标的接口，按报告期增量）。", dependencies=["stock_basic"], source_name="fuyao", source_mode="incremental", supports_incremental=True
             ),
             "financial_fuyao": JobDefinition(
                 "financial_fuyao", "财务三表", "app/utils/financial_fuyao.py", display_name="财务三表（扶摇源）",
                 description="从扶摇数据源下载利润表/资产负债表/现金流量表（单标的接口逐只拉取，免费 key 可用），与 tushare VIP 版写入同一组表。",
                 dependencies=["stock_basic"], source_name="fuyao", source_mode="incremental", supports_incremental=True
             ),
-            "moneyflow": JobDefinition("moneyflow", "资金流与扩展因子", "app/utils/moneyflow.py", display_name="资金流向", description="下载主力、大单、中单和小单资金流数据。", recommended_order=7, source_name="tushare", source_mode="incremental", supports_incremental=True),
-            "moneyflow_ths": JobDefinition("moneyflow_ths", "资金流与扩展因子", "app/utils/moneyflow_ths.py", display_name="同花顺资金流", description="下载同花顺口径资金流数据。", source_name="ths", source_mode="incremental", supports_incremental=True),
-            "stk_factor": JobDefinition("stk_factor", "资金流与扩展因子", "app/utils/stk_factor.py", display_name="扩展技术因子", description="下载或计算扩展因子字段。", recommended_order=8, source_name="tushare", source_mode="incremental", supports_incremental=True),
-            "cyq_perf": JobDefinition("cyq_perf", "资金流与扩展因子", "app/utils/cyq_perf.py", display_name="筹码分布", description="下载筹码成本、胜率等筹码分布指标。", recommended_order=9, source_name="tushare", source_mode="incremental", supports_incremental=True),
+            "moneyflow": JobDefinition("moneyflow", "资金流与扩展因子", "app/utils/moneyflow_derived.py", display_name="资金流向（本地估算）", description="按价格位置法估算每日资金净额；大中小单分层需逐笔数据，现有数据源均不提供，保持缺失。", recommended_order=7, source_name="derived", source_mode="derived"),
+            "stk_factor": JobDefinition("stk_factor", "资金流与扩展因子", "app/utils/stk_factor_derived.py", display_name="扩展技术因子", description="由本地日线自算 MACD/KDJ/RSI/BOLL/CCI 与复权价，不依赖外部行情源。", recommended_order=8, source_name="derived", source_mode="derived", dependencies=["daily_history_fuyao"]),
+            "stk_factor_derived": JobDefinition(
+                "stk_factor_derived",
+                "资金流与扩展因子",
+                "app/utils/stk_factor_derived.py",
+                display_name="扩展技术因子（本地自算）",
+                description=(
+                    "不依赖任何外部行情源：直接读已落盘的 daily_history/daily，"
+                    "自算 MACD/KDJ/RSI/BOLL/CCI 与复权价，写入与 tushare 版同一张 "
+                    "stk_factor/daily 表（复权因子取本地数仓 forward_factor，"
+                    "取不到时退化为未复权）。"
+                ),
+                recommended_order=8,
+                source_name="derived",
+                source_mode="derived",
+                dependencies=["daily_history_fuyao"],
+            ),
+            "cyq_perf": JobDefinition("cyq_perf", "资金流与扩展因子", "app/utils/cyq_perf_derived.py", display_name="筹码分布（本地估算）", description="按三角形分布+换手衰减模型自算筹码成本分布与胜率，数据源均不提供真实筹码。", recommended_order=9, source_name="derived", source_mode="derived", dependencies=["daily_history_fuyao"]),
+            # 分钟线：TickFlow 日内分时（pro+ 档，Beta）。填补 stock_minute 缺口 ——
+            # 通达信 pytdx 不支持 1min（bars.py 直接抛错）、Baostock 会把 1min 静默降级为 5min。
+            # 逐只请求（全市场约 5500 次），脚本内置限频重试与节流，建议盘中/盘后单次执行。
+            "minute_sync_tickflow": JobDefinition(
+                "minute_sync_tickflow",
+                "分钟线",
+                "app/utils/minute_sync_tickflow.py",
+                display_name="分钟线同步（TickFlow 日内分时）",
+                description=(
+                    "同步最新交易日分钟线到 stock_minute/，供实时监控/异动/情绪与 WebSocket 推送使用。"
+                    "参数 period=1m|5m|15m|30m|60m（默认 1m，与监控默认的 5min 分属不同分区）。"
+                ),
+                recommended_order=19,
+                source_name="tickflow",
+                source_mode="incremental",
+                supports_incremental=True,
+                dependencies=["stock_basic"],
+            ),
             "ma_calculator": JobDefinition(
                 "ma_calculator",
                 "衍生计算",

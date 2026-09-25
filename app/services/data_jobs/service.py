@@ -1,3 +1,14 @@
+"""数据任务服务门面：提交、去重、重试与查询。
+
+提交流程：清理僵尸 run → find_active_duplicate 去重 → create_run(pending)
+→ update_run_status(queued) → 按 execution_mode 派发。
+
+执行模式：去 Redis/Celery 后只剩 **inline** 一种（见 _resolve_execution_mode），
+即用后台线程执行 run_data_job；线程内自建 app context，状态推进与失败落盘
+全部由它负责，提交侧立即返回 queued——同步跑会把提交请求挂住最长
+DATA_JOB_TIMEOUT，浏览器超时重试还会被去重逻辑拒绝。
+"""
+
 import threading
 from app.utils.time_utils import now_local
 from typing import Any, Dict, Optional
@@ -13,6 +24,11 @@ except Exception:  # pragma: no cover
 
 
 def _resolve_execution_mode(explicit_mode: Optional[str] = None) -> str:
+    """解析任务执行模式：优先入参，其次 Flask 配置 DATA_JOB_EXECUTION_MODE。
+
+    **去 Redis/Celery 后只剩 inline 一种实现**，app context 不可用时也按 inline 处理，
+    因此这里的兜底不是「降级」而是当前唯一模式。
+    """
     if explicit_mode:
         return explicit_mode
 
@@ -42,6 +58,14 @@ class DataJobService:
         self.execution_mode = _resolve_execution_mode(execution_mode)
 
     def submit(self, job_type: str, params: Optional[Dict[str, Any]] = None):
+        """提交数据任务：先清僵尸、再查重、最后建 run。
+
+        顺序是刻意的：
+        1. **先 reap_stale_runs** —— worker 被 kill 后 run 会永远停在 running，
+           不清理的话查重会永久拒绝该作业再次提交；
+        2. find_active_duplicate 命中即抛 ValueError（幂等保护）；
+        3. 建 run 抛 TypeError 时回退到精简参数调用，兼容 state_store 的签名差异。
+        """
         definition = self.registry.get_job(job_type)
         params = params or {}
         # 提交前先清理僵尸 run：worker 被 kill 后 run 永远停在 running，

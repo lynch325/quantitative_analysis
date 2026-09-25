@@ -1,14 +1,35 @@
 import { NavLink, Route, Routes, useLocation } from 'react-router-dom'
-import { lazy, Suspense, useEffect, Component, type ReactNode } from 'react'
+import { lazy as reactLazy, Suspense, useEffect, Component, type ComponentType, type ReactNode } from 'react'
 import {
   Activity, BookOpen, Bot, Brain, Briefcase, Coins, Compass, Crosshair, Database, Dna,
-  ExternalLink, Factory, FileText, Flag, Flame, FlaskConical, HeartPulse, Home,
+  Factory, FileText, Flag, Flame, FlaskConical, HeartPulse, Home,
   LayoutDashboard, LayoutGrid, Layers, Lightbulb, List, Medal, MessageSquare, Moon,
   Newspaper, PieChart, Plug, Radar, Radio, Search, Shield, Star, Sun, Timer,
   TrendingUp, Trophy, Zap,
   type LucideIcon,
 } from 'lucide-react'
 import { ThemeProvider, useTheme } from './theme/ThemeContext'
+import { SchemeSelect } from './components/ui'
+
+const CHUNK_RELOAD_KEY = 'chunk-reload-at'
+
+/**
+ * React.lazy 包装：重新构建后 chunk hash 变化，旧文件被清理，而仍停留在旧页面的
+ * 标签页还会去加载旧 chunk（后端对缺失的静态资源返回 404，见 app/frontend_spa.py）。
+ * 动态 import 失败会让整个路由组件加载不出来——现象就是「某个页面点了没反应 /
+ * 功能用不了」。这里捕获后自动整页刷新到新版本；10s 内只刷一次，避免异常时死循环。
+ */
+const lazy = <T extends ComponentType<any>>(factory: () => Promise<{ default: T }>) =>
+  reactLazy(() =>
+    factory().catch((err: unknown) => {
+      const last = Number(sessionStorage.getItem(CHUNK_RELOAD_KEY) || 0)
+      if (Date.now() - last > 10_000) {
+        sessionStorage.setItem(CHUNK_RELOAD_KEY, String(Date.now()))
+        window.location.reload()
+      }
+      throw err
+    }),
+  )
 
 // 全部页面按路由 lazy 分割：echarts / lightweight-charts 等重组件随页面 chunk 加载，首屏只拉入口
 const HomePage = lazy(() => import('./pages/HomePage'))
@@ -49,9 +70,7 @@ const HotStocksPage = lazy(() => import('./pages/HotStocksPage'))
 const ConceptAnalysisPage = lazy(() => import('./pages/ConceptAnalysisPage'))
 const IndustryAnalysisPage = lazy(() => import('./pages/IndustryAnalysisPage'))
 const DataSourceCenterPage = lazy(() => import('./pages/DataSourceCenterPage'))
-
-/** 旧版 Flask 前端地址：开发态 Vite 与 Flask 不同端口，直接指向 5000；构建产物由 Flask 同源托管时为空串 */
-export const OLD_SITE_BASE = import.meta.env.DEV ? 'http://127.0.0.1:5000' : ''
+const StockPoolPage = lazy(() => import('./pages/StockPoolPage'))
 
 interface NavLeaf {
   to: string
@@ -76,6 +95,7 @@ const NAV_GROUPS: NavGroup[] = [
       { to: '/stocks', label: '股票列表', icon: List },
       { to: '/analysis', label: '技术分析', icon: Activity },
       { to: '/screen', label: '选股筛选', icon: Search },
+      { to: '/stock-pool', label: '股票池', icon: Layers },
       { to: '/backtest', label: '策略回测', icon: FlaskConical },
     ],
   },
@@ -234,12 +254,7 @@ function Shell() {
             <span className="ico">{mode === 'dark' ? <Sun size={15} strokeWidth={1.8} aria-hidden /> : <Moon size={15} strokeWidth={1.8} aria-hidden />}</span>
             {mode === 'dark' ? '浅色模式' : '深色模式'}
           </button>
-          <a className="btn-ghost" href={`${OLD_SITE_BASE}/`}>
-            <span className="ico">
-              <ExternalLink size={14} strokeWidth={1.8} aria-hidden />
-            </span>{' '}
-            旧版
-          </a>
+          <SchemeSelect />
         </div>
       </aside>
       <div className="app-body">
@@ -325,6 +340,7 @@ function Shell() {
                 </LazyRoute>
               }
             />
+            <Route path="/stock-pool" element={<LazyRoute><StockPoolPage /></LazyRoute>} />
             <Route path="/ml-factor" element={<LazyRoute><MlFactorIndexPage /></LazyRoute>} />
             <Route path="/ml-factor/models" element={<LazyRoute><MlModelsPage /></LazyRoute>} />
             <Route path="/ml-factor/scoring" element={<LazyRoute><MlScoringPage /></LazyRoute>} />

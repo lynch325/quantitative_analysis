@@ -1,3 +1,23 @@
+"""数据作业公共骨架：交易日解析、缺口回补、限速重试与分区落盘。
+
+被 app/utils 下的抓取脚本以顶层模块名导入（子进程运行时该目录在 sys.path 上）。
+三层能力：
+
+1. **日期解析**（resolve_trade_dates）：读 DATA_JOB_TRADE_DATE /
+   DATA_JOB_START_DATE / DATA_JOB_END_DATE / DATA_JOB_FULL_REFRESH，
+   缺省「只拉最新一天」；无交易日历时退化为直接用显式区间。
+2. **缺口回补**（resolve_trade_dates_with_gap_fill）：未显式给区间时，
+   对比本地已有分区与开市日历，自动补拉缺失交易日；单次回补天数有上限
+   （DATA_JOB_MAX_GAP_FILL，默认 60，从旧往新截断），防止误删分区后
+   一次性烧光 Tushare 积分。
+3. **DailyFetchJob**：按交易日拉全市场的作业骨架——限速（rate_limit_seconds）、
+   指数退避重试（max_retries）、分区落盘、失败以退出码 1 结束
+   （让作业记为 failed 可整体重试，而不是静默留下数据空洞）。
+
+读表的交易日历与股票清单都来自本地 Parquet（ParquetDataReader），
+因此必须先跑完「交易日历 / 股票基础资料」作业。
+"""
+
 import os
 import sys
 import time
@@ -12,6 +32,11 @@ from app.utils.parquet_writer import save_partitioned_parquet
 
 
 def normalize_ymd(date_str: Optional[str]) -> Optional[str]:
+    """把日期规整成 YYYYMMDD；空值返回 None。
+
+    与 app/utils/job_env.py 里的同名函数**实现重复**（后者面向 MySQL 作业、
+    本函数面向 parquet 作业），改动时两边要一起改。
+    """
     if not date_str:
         return None
     text = str(date_str).strip()
@@ -212,6 +237,12 @@ class DailyFetchJob:
         raise NotImplementedError
 
     def _fetch_with_retry(self, trade_date: str) -> Optional[pd.DataFrame]:
+        """带指数退避的拉取：最多重试 max_retries 次，退避时长
+        为 max(rate_limit_seconds, 0.5) × 2^(attempt-1)。
+
+        全部失败返回 None 交给调用方记账，不抛异常中断整批作业；
+        成功路径也会 sleep rate_limit_seconds 做限速。
+        """
         last_error: Optional[Exception] = None
         for attempt in range(1, self.max_retries + 1):
             try:
@@ -232,6 +263,11 @@ class DailyFetchJob:
         return None
 
     def run(self) -> int:
+        """作业入口：按交易日逐日拉取并分区落盘，返回进程退出码。
+
+        单日失败只记入 failed_dates 不中断循环，末尾按失败情况决定返回码，
+        以便 data_jobs 框架把作业标成失败但不丢已成功的数据。
+        """
         trade_dates, _ = resolve_trade_dates_with_gap_fill(self.rel_table)
         if not trade_dates:
             print(f"[{self.job_name}] 没有需要拉取的交易日")

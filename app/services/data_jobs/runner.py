@@ -1,3 +1,19 @@
+"""数据任务脚本执行器：以子进程方式运行 app/utils 下的批处理脚本。
+
+设计要点：
+- **子进程隔离**：脚本崩溃或内存暴涨不会带走 web 进程；启动时把项目根注入
+  PYTHONPATH，脚本才能 `import app.*` 与 `config`；
+- **参数经环境变量传递**（DATA_JOB_START_DATE / DATA_JOB_TRADE_DATE /
+  DATA_JOB_FULL_REFRESH / DATA_JOB_PARAM_<KEY> 等），脚本侧由
+  app/utils/parquet_job_helpers.py 的 resolve_trade_dates 统一解析，
+  绕开命令行长度与编码问题；
+- **超时兜底**：超时上限取 DATA_JOB_TIMEOUT（缺省 3600 秒），超时杀子进程并返回
+  returncode=124 的结果（与 shell 约定一致），让上层走正常失败落盘流程，
+  而不是把异常抛进 worker 日志后无人知晓。
+
+作业定义见 app/services/data_jobs/registry.py，状态落盘见 parquet_state_store。
+"""
+
 from pathlib import Path
 import os
 import subprocess

@@ -51,23 +51,24 @@ class AssistantService:
     # 状态与会话管理（供 API 层调用）
 
     def status(self) -> Dict[str, Any]:
+        """聚合 AI 助手运行状态给前端：大模型配置、数据源凭证、可用工具清单与大宽表状态。
+
+        未配置大模型时附带 config_hint，直接告诉用户该在 .env 补什么。
+        注意 data_dir 是相对路径时会被拼成项目绝对路径 —— 状态接口读的是磁盘真实状态，不是配置字面量。
+        """
         from app.services.ai.prompts import build_status_hint
-        from app.services.ai.tools import list_tool_summaries
+        from app.services.ai.tools import list_tool_summaries, source_token_status
 
         client_status = self.client.status_summary()
         status: Dict[str, Any] = {
             'llm': client_status,
-            'tushare_token_configured': False,
+            # 本项目不使用 Tushare：只暴露扶摇 / TickFlow 的凭证状态
+            'source_tokens_configured': source_token_status(),
             'tools': list_tool_summaries(allow_actions=True),
             'config_hint': None,
         }
         if not client_status['configured']:
             status['config_hint'] = build_status_hint(self.config)
-
-        import os
-
-        token = (os.getenv('TUSHARE_TOKEN') or '').strip()
-        status['tushare_token_configured'] = token not in ('', 'your_tushare_token')
 
         try:
             from app.services.wide_table_status import get_wide_table_status
@@ -94,6 +95,8 @@ class AssistantService:
         return session
 
     def list_sessions(self, limit: int = 50) -> List[Dict[str, Any]]:
+        """列出最近会话，按 updated_at 倒序（同秒再按 id 倒序），limit 夹在 1..200。
+        """
         self._ensure_tables()
         sessions = (
             AiChatSession.query.order_by(AiChatSession.updated_at.desc(), AiChatSession.id.desc())
@@ -103,6 +106,11 @@ class AssistantService:
         return [session.to_dict() for session in sessions]
 
     def get_messages(self, session_id: int, limit: int = 200) -> List[Dict[str, Any]]:
+        """取会话消息，返回**正序**列表。
+
+        实现是倒序查 limit 条再翻正：这样拿到的是最近 limit 条而不是最早的 limit 条。
+        会话不存在抛 AssistantError（接口层转 404）；limit 夹在 1..500。
+        """
         self._ensure_tables()
         if AiChatSession.query.get(session_id) is None:
             raise AssistantError(f'会话不存在: {session_id}')
@@ -115,6 +123,10 @@ class AssistantService:
         return [message.to_dict() for message in reversed(messages)]
 
     def delete_session(self, session_id: int) -> bool:
+        """删除会话及其全部消息；会话不存在返回 False。
+
+        先删消息再删会话（避免留下孤儿消息），最后统一提交。
+        """
         self._ensure_tables()
         session = AiChatSession.query.get(session_id)
         if session is None:
@@ -180,6 +192,16 @@ class AssistantService:
     # 智能体循环（工作线程内执行）
 
     def _run_conversation(self, session_id, user_message, allow_actions, emit):
+        """对话主循环（生成器式，通过 emit 回调向前端推事件）。
+
+        流程与约定：
+        1. 会话不存在时自动新建，标题取用户消息前 30 字，并推一条 type=session 事件；
+        2. 用户消息先落库，再更新会话 updated_at；
+        3. 组装上下文：system 提示词（build_system_prompt）加历史消息，
+           历史用 _load_history(exclude_recent=1) 加载 —— 排除刚落库的这条用户消息，否则重复；
+        4. allow_actions 决定本轮是否放行动作类工具（与 system 提示词中的工具清单保持一致）。
+        改动这里的消息顺序会直接影响模型表现，属于高敏感区域。
+        """
         self._ensure_tables()
 
         session = AiChatSession.query.get(session_id) if session_id else None
@@ -321,6 +343,11 @@ class AssistantService:
         return history
 
     def _save_tool_message(self, session_id, name, arguments, outcome, duration_ms):
+        """把一次工具调用落库为 role='tool' 的消息。
+
+        成功存 result、失败存 error；tool_args 与 tool_result 经 _persist_payload 处理（序列化/截断），
+        duration_ms 供前端展示耗时。
+        """
         payload = outcome.get('result') if outcome['ok'] else {'error': outcome.get('error')}
         db.session.add(
             AiChatMessage(

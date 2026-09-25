@@ -175,7 +175,7 @@ mkdir instance                # Windows 用 md instance
 | 配置项 | 必改？ | 说明 |
 | --- | --- | --- |
 | `SECRET_KEY` | **建议改** | 会话加密密钥。终端执行下面命令生成一个填进去 |
-| `TUSHARE_TOKEN` | 可选 | Tushare 数据源令牌。**不填也能跑**：系统自动改用免费的 Baostock 数据源；但部分数据集（如资金流）只有 Tushare 提供。注册 https://tushare.pro 可获取 token |
+| `FUYAO_API_KEY` | **建议填** | 扶摇（同花顺官方）数据源令牌，负责日线、财务三表、估值、涨停池等。注册 https://fuyao.aicubes.cn 获取 |
 | `LLM_API_KEY` 等 | 可选 | AI 智能工作台用的大模型配置。不填则 AI 对话功能不可用，其余功能完全正常。可用 DeepSeek（充值几块钱即可）或本地 Ollama（免费，见 `.env` 内注释） |
 | `DATA_JOB_EXECUTION_MODE` | 不用动 | 保持 `inline` 即可，任务在本地进程执行，无需任何外部服务 |
 
@@ -274,7 +274,7 @@ npm run dev
 
 详细的数据集说明见 [README 的「数据下载」章节](README.md)。
 
-> 💡 未配置 `TUSHARE_TOKEN` 时系统用 Baostock 免费源，基础日线够用；配置后可解锁资金流等更多数据集。数据保存在本地 `data/` 目录（Parquet 格式），首次下载后自动生成。
+> 💡 本项目数据源为 **扶摇（`FUYAO_API_KEY`）**、**TickFlow（`TICKFLOW_API_KEY`）** 与**本地通达信数仓**；分钟线走通达信/Baostock。**不使用 Tushare**。数据保存在本地 `data/` 目录（Parquet 格式），首次下载后自动生成。
 
 ---
 

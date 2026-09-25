@@ -10,6 +10,8 @@ import os
 from typing import Dict, List, Optional, Tuple
 
 import pandas as pd
+import pyarrow.compute as pc
+import pyarrow.dataset as ds
 from loguru import logger
 
 from app.services.minute_parquet_reader import MinuteParquetReader
@@ -274,13 +276,22 @@ class ParquetDataReader:
             df = df[df["ts_code"] == ts_code]
         return df
 
+    #: 允许按这些列排序（白名单，防止调用方把任意列名塞进 sort_values）
+    STOCK_BASIC_SORT_FIELDS = ("ts_code", "symbol", "name", "industry", "area", "list_date")
+
     def get_stock_basic_list(
         self,
         industry: Optional[str] = None,
         area: Optional[str] = None,
         search: Optional[str] = None,
+        sort_by: Optional[str] = None,
+        sort_order: str = "asc",
     ) -> pd.DataFrame:
-        """读取 stock_basic 表，按 industry/area/search 过滤。"""
+        """读取 stock_basic 表，按 industry/area/search 过滤，可选排序。
+
+        排序必须发生在调用方分页切片之前，否则只会排当前页。
+        list_date 为空（NaT）的行无论升降序都排在最后。
+        """
         df = self.get_stock_basic()
         if df.empty:
             return df
@@ -296,6 +307,15 @@ class ParquetDataReader:
                 | df["name"].str.contains(kw.replace("%", ""), case=False, na=False)
             )
             df = df[mask]
+        if sort_by and sort_by in self.STOCK_BASIC_SORT_FIELDS and sort_by in df.columns:
+            df = df.sort_values(
+                sort_by,
+                ascending=str(sort_order).lower() != "desc",
+                na_position="last",
+                # 稳定排序：list_date 有大量并列值，非稳定排序会让同一查询
+                # 在不同页之间出现重复或遗漏
+                kind="mergesort",
+            )
         return df
 
     def get_industry_list(self) -> List[str]:
@@ -461,22 +481,57 @@ class ParquetDataReader:
             logger.warning(f"Parquet 目录不存在: {base}")
             return pd.DataFrame()
 
+        # 空代码列表与旧行为一致：过滤后必为空，直接返回，避免退化成全表读
+        if ts_codes is not None and len(ts_codes) == 0:
+            return pd.DataFrame()
+
+        # 列裁剪 + 谓词下推。整读窗口内每个分区会把一次小查询放大成整库 IO
+        # （单日分区约 280KB，查 20 只股票一年现状要读约 68MB / 峰值 314MB）。
+        std_cols = self.STANDARD_COLUMNS.get(table)
+        wanted_cols = list(std_cols) if std_cols else None
+        code_list = sorted(set(ts_codes)) if ts_codes else None
+        code_filter = [("ts_code", "in", code_list)] if code_list else None
+        files = list(self._walk_partitions(base, sd, ed))
+
+        if not files:
+            return pd.DataFrame()
+
         frames = []
-        for parquet_path in self._walk_partitions(base, sd, ed):
-            try:
-                df = pd.read_parquet(parquet_path)
+        try:
+            # 一次 dataset 读取：多文件并行解码 + 列裁剪 + 谓词下推。
+            # schema 按首个文件推断，历史分区缺列时按实际 schema 再取交集。
+            dataset = ds.dataset(files, format="parquet")
+            names = set(dataset.schema.names)
+            cols = [c for c in wanted_cols if c in names] if wanted_cols else None
+            expr = (
+                pc.field("ts_code").isin(code_list)
+                if (code_list and "ts_code" in names)
+                else None
+            )
+            frames = [dataset.to_table(filter=expr, columns=cols).to_pandas()]
+        except Exception as e:
+            logger.warning(f"dataset 下推读取失败，退回逐文件读取: {e}")
+            frames = []
+            for parquet_path in files:
+                try:
+                    df = pd.read_parquet(parquet_path, columns=wanted_cols, filters=code_filter)
+                except Exception as e2:
+                    logger.warning(f"下推读取失败，退回整读 {parquet_path}: {e2}")
+                    try:
+                        df = pd.read_parquet(parquet_path)
+                    except Exception as e3:
+                        logger.warning(f"读取 parquet 失败 {parquet_path}: {e3}")
+                        continue
                 if not df.empty:
                     frames.append(df)
-            except Exception as e:
-                logger.warning(f"读取 parquet 失败 {parquet_path}: {e}")
 
+        frames = [f for f in frames if not f.empty]
         if not frames:
             return pd.DataFrame()
 
         result = pd.concat(frames, ignore_index=True)
 
         # 只保留标准列，过滤掉可能混入的额外列
-        std_cols = self.STANDARD_COLUMNS.get(table)
         if std_cols:
             keep = [c for c in std_cols if c in result.columns]
             result = result[keep]

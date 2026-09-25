@@ -63,6 +63,9 @@ def api_stock_radar():
 
 @api_bp.route('/trial/stock-panorama', methods=['GET'])
 def api_stock_panorama():
+    """GET 个股全景。ts_code 先 strip 再转大写；缺参直接 400（不静默返回空数据），
+    便于前端把「参数没传」和「查无此股」区分开。
+    """
     try:
         ts_code = request.args.get('ts_code', '').strip().upper()
         if not ts_code:
@@ -74,6 +77,9 @@ def api_stock_panorama():
 
 @api_bp.route('/trial/heatmap', methods=['GET'])
 def api_heatmap():
+    """GET 板块热力图数据（sectors + stocks），并透出 sectors 首条的 trade_date
+    作为数据日期 —— 前端标题要显示「数据截至 X 日」，热力图接口本身不返回日期。
+    """
     try:
         sectors, stocks = HeatmapService().get_heatmap_data()
         return _ok({

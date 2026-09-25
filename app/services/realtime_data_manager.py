@@ -14,13 +14,7 @@ from app.services.data_reader import ParquetDataReader
 from app.services.minute_parquet_reader import MinuteParquetReader
 from app.services.minute_parquet_store import MinuteParquetStore
 
-# 可选导入tushare
-try:
-    import tushare as ts
-    TUSHARE_AVAILABLE = True
-except ImportError:
-    TUSHARE_AVAILABLE = False
-    ts = None
+# 分钟数据固定走 通达信(pytdx) / Baostock，不使用 Tushare。
 
 # 配置日志
 logging.basicConfig(level=logging.INFO)
@@ -36,20 +30,13 @@ class RealtimeDataManager:
     def __init__(self, tushare_token: Optional[str] = None):
         """
         初始化实时数据管理器
-        
+
         Args:
-            tushare_token: Tushare API token
+            tushare_token: 已废弃，保留仅为兼容旧调用签名（本项目不使用 Tushare）
         """
-        self.tushare_token = tushare_token
-        if tushare_token and TUSHARE_AVAILABLE:
-            ts.set_token(tushare_token)
-            self.pro = ts.pro_api()
-        else:
-            self.pro = None
-            if not TUSHARE_AVAILABLE:
-                logger.warning("Tushare未安装，将使用Baostock数据源")
-            else:
-                logger.warning("未设置Tushare token，将使用Baostock数据源")
+        # 本项目数据源固定为 通达信 / Baostock / 扶摇，不再使用 Tushare。
+        self.tushare_token = None
+        self.pro = None
         
         # 初始化分钟数据同步服务
         self.minute_sync_service = MinuteDataSyncService()
@@ -530,6 +517,10 @@ class RealtimeDataManager:
         end_time,
         period_type: str = '1min'
     ) -> pd.DataFrame:
+        """取单只股票某时间区间的分钟线。
+
+        纯转发给 minute_reader，不在这里做加工或缓存，便于按需替换读取实现。
+        """
         return self.get_minute_reader().get_data(ts_code=ts_code, period_type=period_type, start_time=start_time, end_time=end_time)
 
     def get_minute_summary(self, ts_code: str, period_type: str = '1min', hours: int = 24) -> Dict:
@@ -545,6 +536,11 @@ class RealtimeDataManager:
         return sorted(df["ts_code"].dropna().astype(str).unique().tolist())
 
     def get_minute_stats(self) -> Dict:
+        """汇总分钟数据总览：各周期行数、标的总数、最早/最晚时间与总记录数。
+
+        没有任何数据时返回零值骨架而不是 None，前端可直接渲染；
+        跨周期拼接只为算统计口径，不返回明细。
+        """
         periods = self.get_minute_periods()
         stats: Dict[str, int] = {}
         all_frames: list[pd.DataFrame] = []

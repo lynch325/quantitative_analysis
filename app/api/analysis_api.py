@@ -1,3 +1,13 @@
+"""选股与回测接口（挂在主蓝图 api_bp，URL 前缀 /api）。
+
+- `POST /api/analysis/screen`：条件选股，转 StockService.screen_stocks；
+- `POST /api/analysis/backtest`：**单标的**策略回测，必填
+  ts_code / strategy_type / start_date / end_date / initial_capital。
+
+两者都是同步执行的重接口（选股要全市场打分、回测要逐日推进），前端应放宽超时；
+错误一律以 `{code: 500, message}` 返回并经 logger 记录，不向外抛栈。
+"""
+
 from flask import request, jsonify
 from app.api import api_bp
 from app.services.stock_service import StockService

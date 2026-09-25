@@ -36,6 +36,13 @@ def _split_env(name):
 
 
 def main():
+    """作业入口：按参数计算因子并落盘。
+
+    参数从 data_jobs runner 注入的环境变量读取：DATA_JOB_TRADE_DATE /
+    DATA_JOB_START_DATE / DATA_JOB_END_DATE / DATA_JOB_PARAM_FACTOR_IDS /
+    DATA_JOB_PARAM_TS_CODES。三者日期都未给时默认取最新交易日；
+    完全没有任何交易日数据时 exit(1)，让作业框架判失败。
+    """
     engine = FactorEngine()
 
     trade_date = os.getenv("DATA_JOB_TRADE_DATE") or None

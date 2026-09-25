@@ -127,6 +127,11 @@ class MarketSnapshotService:
         return {code: result[code] for code in wanted if code in result}
 
     def _fetch_quote_rows(self, ts_codes: List[str]) -> List[Dict[str, Any]]:
+        """分批（每批 100 只）拉取实时快照并合并股票名称。
+
+        **失败回退**：扶摇异常时不抛错，改为返回缓存中的旧快照（_stale_quotes），
+        让行情页在数据源抖动时仍能显示 —— 宁可显示略旧的价格，也不要整页空白。
+        """
         rows: List[Dict[str, Any]] = []
         try:
             for start in range(0, len(ts_codes), 100):
@@ -140,6 +145,10 @@ class MarketSnapshotService:
         return self._merge_stock_names(frame.to_dict("records"))
 
     def _stale_quotes(self, ts_codes: List[str]) -> List[Dict[str, Any]]:
+        """取缓存中仍在 STALE_SERVE_SECONDS 内的旧报价，作为数据源失败时的降级返回。
+
+        超出容忍窗口的直接丢弃：宁可缺数据，也不展示严重过期的价格。
+        """
         now = time.monotonic()
         stale: List[Dict[str, Any]] = []
         with self._lock:
@@ -328,10 +337,11 @@ class MarketSnapshotService:
     # ---- 数据源状态 ----
 
     def get_source_status(self, force: bool = False) -> Dict[str, Any]:
-        """三数据源健康状态（缓存 5 分钟）。
+        """数据源健康状态（缓存 5 分钟）。
 
-        tushare 只做 token 配置检查（不 burn 积分）；fuyao/tickflow 发最小
-        探测请求。
+        本项目只用 fuyao / tickflow 两个外部源：fuyao 走最小快照探测，
+        tickflow 只做档位探测（detect_tier）。本地通达信数仓与自算表不需要
+        凭证，因此不出现在此处。
         """
         with self._lock:
             cached = self._status_cache
@@ -339,9 +349,6 @@ class MarketSnapshotService:
             return cached[1]
 
         status: Dict[str, Any] = {"checked_at": self._now_ms()}
-
-        tushare_token = (_env("TUSHARE_TOKEN") or "").strip()
-        status["tushare"] = {"configured": tushare_token not in ("", "your_tushare_token")}
 
         fuyao_key = (_env("FUYAO_API_KEY") or "").strip()
         fuyao_status: Dict[str, Any] = {"configured": bool(fuyao_key)}

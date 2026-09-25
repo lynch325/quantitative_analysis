@@ -13,22 +13,23 @@ interface SourceMeta {
 
 const SOURCES: SourceMeta[] = [
   {
-    key: 'tushare',
-    name: 'Tushare',
-    description: '历史估值、技术因子、资金流、筹码分布等日频数据的既有主干源。',
-    roles: ['daily_basic', 'stk_factor', 'moneyflow', 'cyq_perf', 'trade_calendar', '股票元数据'],
-  },
-  {
     key: 'fuyao',
     name: '扶摇（同花顺）',
-    description: '全市场日K dump、实时快照、财务三表、龙虎榜与竞价风向标；免费 key 可用。',
-    roles: ['daily_history（可选）', 'financial（可选）', '实时行情', '龙虎榜/风向标'],
+    description: '项目主干外部源：全市场日K dump（10天/10年）、全市场快照、财务三表、估值快照、交易日历，以及实时行情/龙虎榜/涨停池/竞价风向标。',
+    roles: [
+      'daily_history（日线）',
+      'financial（财务三表）',
+      'daily_basic（估值快照）',
+      'trade_calendar（近一年）',
+      'stock_basic（代码清单）',
+      '实时行情/龙虎榜/涨停池',
+    ],
   },
   {
     key: 'tickflow',
     name: 'TickFlow',
-    description: 'free 档仅支持单标的日K与少量实时行情（约 5rpm），定位为校验兜底源，勿用于批量任务。',
-    roles: ['校验兜底'],
+    description: '多市场补充源：分钟线（日内分时 1m~60m）、日K、实时行情、除权因子、交易所标的维表；本机 key 为付费档。',
+    roles: ['stock_minute（分钟线）', '股票名称兜底', '数据源档位探测'],
   },
 ]
 
@@ -70,7 +71,7 @@ export default function DataSourceCenterPage() {
     <div className="tsp-root min-h-full">
       <PageHeader
         title="数据源中心"
-        subtitle="三个数据源的配置状态与健康探测 · 与数据管理页（任务执行）互补"
+        subtitle="外部数据源的配置状态与健康探测 · 与数据管理页（任务执行）互补"
         right={
           <button
             type="button"
@@ -138,12 +139,14 @@ export default function DataSourceCenterPage() {
               </thead>
               <tbody>
                 {[
-                  ['日线行情 daily_history', 'tushare / fuyao', '扶摇走全市场 dump，适合初始化与快速回补'],
-                  ['财务三表', 'tushare(VIP) / fuyao', '两源按报告期合并共存，互不覆盖'],
-                  ['股票清单 stock_basic', 'tushare / fuyao', '行业与退市股元数据以 tushare 为准'],
-                  ['日线指标 daily_basic', 'tushare', '扶摇估值仅有当日快照，无历史'],
-                  ['技术因子 / 资金流 / 筹码', 'tushare', '扶摇与 TickFlow 不提供'],
+                  ['日线行情 daily_history', 'fuyao', '全市场 dump 优先（10天/10年），单标的接口兜底补尾'],
+                  ['财务三表', 'fuyao', '按披露截止日自动推进报告期，逐标的增量'],
+                  ['股票清单 stock_basic', 'fuyao + 本地数仓', '扶摇快照取代码，数仓 dim_stock 回填名称/上市日；行业/地域/概念取自数仓板块表'],
+                  ['日线指标 daily_basic', '本地日线 + 数仓 + fuyao', '收盘价与量比由本地日线算，总市值取数仓 GP16，估值取扶摇快照（仅最新日）'],
+                  ['技术因子 / 资金流 / 筹码', '本地自算', '由日线 Parquet 自算（stk_factor / moneyflow 估算 / cyq_perf 筹码模型）'],
+                  ['分钟线 stock_minute', 'tickflow', '日内分时 1m/5m/15m/30m/60m（付费档）'],
                   ['实时行情 / 龙虎榜 / 风向标', 'fuyao', '免费 key 即可用'],
+                  ['涨跌停 / 连板 / 板块归属', '本地数仓', 'lake_zt_lb、dim_sector + bridge_stock_sector'],
                 ].map(([dataset, producers, note]) => (
                   <tr key={dataset} className={cn('border-t border-line/60 hover:bg-elevated/50')}>
                     <td className="px-3 py-1.5">{dataset}</td>
@@ -157,8 +160,8 @@ export default function DataSourceCenterPage() {
         </Card>
 
         <Card className="px-3 py-2 text-2xs leading-5 text-fg-muted">
-          凭证通过项目根目录 .env 管理：TUSHARE_TOKEN / FUYAO_API_KEY / TICKFLOW_API_KEY，互不影响；
-          任一数据源不可用不影响其余数据源的下载作业。
+          凭证通过项目根目录 .env 管理：FUYAO_API_KEY / TICKFLOW_API_KEY，互不影响；本地通达信数仓与
+          自算表（技术因子 / 资金流 / 筹码 / 大宽表）不需要凭证。任一数据源不可用不影响其余下载作业。
         </Card>
       </div>
     </div>

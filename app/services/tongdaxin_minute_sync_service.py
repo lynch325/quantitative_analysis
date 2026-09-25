@@ -1,3 +1,17 @@
+"""通达信分钟线同步服务：通过 pytdx 拉 5/15/30/60 分钟线并写入分钟库。
+
+链路：TongdaxinMinuteSyncService（上下文管理器，进入即建连）
+→ tongdaxin.client 多主机探测 → api.get_security_bars 取**最近 800 根**
+→ 按 start/end 日期过滤 → tongdaxin.bars 规范化 → MinuteParquetStore 落盘
+（`data/stock_minute/{period}/...`，与实时链路共用同一张表）。
+
+关键限制：
+- pytdx 单次最多返回 800 根，超出需自行分段拉取（当前实现未分段），
+  因此历史深度受周期长度限制（60 分钟线约 200 个交易日）；
+- 日期窗口缺省为「最近 7 天」，属增量补齐语义，不是全量重刷；
+- 分钟线**不含复权**，与日线的后复权价不可直接混算。
+"""
+
 from __future__ import annotations
 
 from datetime import datetime, timedelta
@@ -34,6 +48,11 @@ class TongdaxinMinuteSyncService:
         self.api = None
 
     def _fetch_minute_payload(self, ts_code: str, period_type: str, start_date: str, end_date: str):
+        """拉取单只股票的分钟线，并**在本地按日期窗口过滤**。
+
+        通达信接口一次最多返回 800 根 K 线，所以只适合近期窗口；
+        datetime 截断到分钟粒度再比较，避免秒级差异让边界日数据丢失。
+        """
         market, code = any_style_code_to_tdx(ts_code)
         category = period_type_to_tdx_category(period_type)
         payload = self.api.get_security_bars(category, market, code, 0, 800) or []
@@ -47,6 +66,11 @@ class TongdaxinMinuteSyncService:
         return filtered
 
     def sync_single_stock_data(self, ts_code: str, period_type: str = "5min", start_date: str = None, end_date: str = None) -> Dict:
+        """同步单只股票的分钟数据到本地分区，返回统计结果。
+
+        日期缺省为「最近 7 天到当前」；取不到数据返回 success=False（属正常业务结果，不算异常）；
+        exception 也被转成失败结构 —— 批量同步靠返回值判断，不靠抛异常。
+        """
         try:
             if not end_date:
                 end_date = datetime.now().strftime("%Y-%m-%d")
@@ -79,6 +103,10 @@ class TongdaxinMinuteSyncService:
         end_date: str = None,
         batch_size: int = 10,
     ) -> Dict:
+        """逐只串行同步分钟数据，返回成功/失败数与总记录数。
+
+        **单只失败不中断整批**；batch_size 目前只回显、未真正参与分批逻辑。
+        """
         success_stocks = 0
         failed_stocks = 0
         total_data_count = 0

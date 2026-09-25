@@ -13,6 +13,11 @@ class _TradingSignalEvent:
         self.__dict__.update(data)
 
     def to_dict(self):
+        """事件对象转 JSON 安全 dict：**NaN → None**，datetime 类值转 ISO 串。
+
+        浮点缺失值（NaN）直接进 JSON 会产出非法字面量 NaN，前端 JSON.parse 会失败，
+        所以必须在这里拦掉。字段集合随对象属性动态透出，新增字段无需改这里。
+        """
         import math
         result = {}
         for key, value in self.__dict__.items():

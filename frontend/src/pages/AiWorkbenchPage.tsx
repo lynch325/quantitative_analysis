@@ -230,7 +230,7 @@ export default function AiWorkbenchPage() {
   const statusChips = useMemo(
     () => [
       { label: `模型 · ${status?.llm.configured ? (status.llm.model ?? '已配置') : '未配置'}`, ok: status?.llm.configured },
-      { label: `Tushare · ${status?.tushare_token_configured ? '已配置' : '未配置'}`, ok: status?.tushare_token_configured },
+      { label: `扶摇 · ${status?.source_tokens_configured?.fuyao ? '已配置' : '未配置'}`, ok: status?.source_tokens_configured?.fuyao },
       { label: `宽表 · ${status?.wide_table.exists ? (status.wide_table.wide_table_date ?? '存在') : '缺失'}`, ok: status?.wide_table.exists },
     ],
     [status],

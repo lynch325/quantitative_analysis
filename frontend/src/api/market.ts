@@ -93,7 +93,6 @@ export interface AuctionBenchmarkItem {
 
 export interface SourceStatus {
   checked_at: number
-  tushare: { configured: boolean }
   fuyao: { configured: boolean; ok?: boolean; error?: string | null }
   tickflow: { configured: boolean; tier: 'none' | 'free' | 'paid' }
 }
@@ -184,11 +183,9 @@ export interface BoardConstituent {
 }
 
 export function fetchLimitUpPool(date?: string, page = 1, size = 100) {
-  return apiGet<LimitUpPoolPayload>('/market/limit-up/pool', {
-    date: date || undefined,
-    page,
-    size,
-  })
+  // 归一化走 poolParams（date input 的 yyyy-MM-dd → 后端要求的 YYYYMMDD）；
+  // 此前这里直接透传，导致一选日期就 400「date 格式应为 YYYYMMDD」
+  return apiGet<LimitUpPoolPayload>('/market/limit-up/pool', poolParams(date, page, size))
 }
 
 export function fetchLimitUpLadder() {

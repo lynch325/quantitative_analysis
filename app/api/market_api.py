@@ -98,6 +98,12 @@ def get_limit_up_ladder():
 
 
 def _pool_endpoint(fetch):
+    """涨跌停池 / 炸板池等池类接口的公共外壳（fetch 为具体取数函数）。
+
+    统一做三件事：date 格式校验（YYYYMMDD，空表示取最新）、
+    分页参数夹取（page ≥ 1，size 夹在 1..200，防止前端传巨大 size 打爆内存）、
+    ValueError → 400。新增池类接口应复用本函数而非各写一套。
+    """
     date = (request.args.get("date") or "").strip() or None
     if date and not _DATE_RE.fullmatch(date):
         return _error("date 格式应为 YYYYMMDD", 400)

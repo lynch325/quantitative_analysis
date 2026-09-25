@@ -25,6 +25,11 @@ class _LocalCelery:
         self.tasks = {}
 
     def task(self, name=None):
+        """本地 Celery 替身：把 @app.task 装饰的函数包成本地执行包装器。
+
+        注册进 self.tasks 并回填 name，使调用方的 delay / apply_async 用法与真实 Celery 保持一致 ——
+        去 Redis/Celery 后任务改为同步执行，但装饰器语义必须不变，否则调用方要跟着改。
+        """
         def _decorator(func):
             wrapper = _LocalTaskWrapper(func)
             task_name = name or func.__name__

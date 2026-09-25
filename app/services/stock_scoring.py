@@ -1,3 +1,19 @@
+"""股票打分引擎：把因子库中的因子值合成截面总分，产出排序与选股结果。
+
+数据流：FactorRepository 取某交易日的因子值（z_score / percentile 等列）
+→ 透视成「股票 × 因子」截面 → 按 scoring_methods 中的一种方法合成总分
+→ 排序并截断 top N（或返回全量带分结果）。
+
+四种打分方法：equal_weight / factor_weight / ml_ensemble / rank_ic。
+
+口径要点：
+- 缺失因子值的股票直接剔除，**不填 0 参与排名**（理由见
+  calculate_factor_scores 内的注释：z_score 均值约为 0，填 0 相当于给
+  缺数据的股票一个中性分，会把数据完整的股票挤出 top N）；
+- 因子值与模型都经 ParquetStateStore 持久化，与回测 / API 共用同一份
+  factor / model 仓库——口径以库里的数据为准，不在本模块内二次加工。
+"""
+
 import pandas as pd
 import numpy as np
 from typing import List, Dict, Any, Optional
@@ -14,6 +30,11 @@ class StockScoringEngine:
     """股票打分引擎"""
     
     def __init__(self, state_store: ParquetStateStore = None):
+        """装配因子/模型仓库与打分方法表。
+
+        state_store 省略时用默认 ParquetStateStore；显式传入可让多个引擎
+        共用同一份存储（测试常用临时目录注入）。
+        """
         self.state_store = state_store or ParquetStateStore()
         self.factor_repo = FactorRepository(self.state_store)
         self.model_repo = ModelRepository(self.state_store)

@@ -92,6 +92,11 @@ class RiskAlert(db.Model):
 
     @classmethod
     def resolve_by_id(cls, alert_id):
+        """手动解除告警：置 is_active=False 且 is_resolved=True 并记 resolved_at。
+
+        走 update_alert 统一写入路径（保证 updated_at 等一并刷新）；未命中返回 None。
+        与「停用（is_active=False 但未解除）」是两种状态，查询侧要区分。
+        """
         alert = cls.get_by_id(alert_id)
         if not alert:
             return None
@@ -134,6 +139,10 @@ class RiskAlert(db.Model):
 
     @classmethod
     def get_active_alerts_for_portfolio(cls, portfolio_codes=None, alert_level=None):
+        """取**未解除的生效告警**（is_active=True 且 is_resolved=False），按 created_at 降序。
+
+        可按股票集合（portfolio_codes）与告警级别过滤，两个参数都可省略。
+        """
         query = cls.query.filter_by(is_active=True, is_resolved=False)
         if portfolio_codes:
             query = query.filter(cls.ts_code.in_(portfolio_codes))
@@ -143,6 +152,10 @@ class RiskAlert(db.Model):
 
     @classmethod
     def get_existing_active_alert(cls, ts_code, alert_type):
+        """查同一股票 + 同一类型的未解除告警，供写入前去重。
+
+        用途是避免同一问题每轮扫描都插一条新告警；返回 None 表示需要新建。
+        """
         return cls.query.filter_by(
             ts_code=ts_code,
             alert_type=alert_type,
@@ -152,6 +165,11 @@ class RiskAlert(db.Model):
 
     @classmethod
     def get_recent_alerts(cls, minutes=10, active_only=True, limit=10):
+        """取最近 N 分钟内产生的告警（前端实时风险面板用）。
+
+        按 created_at 降序取 limit 条；active_only 为真时只含仍生效的告警
+        （已解除的不再弹出）。cutoff 用服务器本地时间计算，与 now_local 写入保持同一时区口径。
+        """
         from datetime import timedelta
 
         cutoff = now_local() - timedelta(minutes=minutes)

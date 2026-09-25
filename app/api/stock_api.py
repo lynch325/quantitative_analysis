@@ -1,3 +1,14 @@
+"""个股与基础清单接口（挂在主蓝图 api_bp，URL 前缀 /api）。
+
+路由：`/stocks`（列表/筛选）、`/stocks/<ts_code>`（详情）、
+`/stocks/<ts_code>/{history,factors,moneyflow,cyq,financials,company}`
+（K 线、因子、资金流、筹码、财务、公司资料）、`/industries`、`/areas`。
+
+实现约定：本文件只做参数解析与响应包装，取数全部委托 StockService
+（Parquet 直读）；异常统一 `{code: 500, message}` 返回并记日志。
+列表类接口有结果条数上限，前端需要的分页/裁剪在 service 层完成。
+"""
+
 from flask import request, jsonify
 from app.api import api_bp
 from app.services.stock_service import StockService
@@ -13,14 +24,19 @@ def get_stocks():
         search = request.args.get('search')
         page = int(request.args.get('page', 1))
         page_size = min(int(request.args.get('page_size', 20)), 100)
-        
+        # 排序：sort_by 走读取层白名单，非法列名会被忽略（退回默认顺序）
+        sort_by = request.args.get('sort_by')
+        sort_order = request.args.get('sort_order', 'asc')
+
         # 调用服务
         result = StockService.get_stock_list(
             industry=industry,
             area=area,
             search=search,
             page=page,
-            page_size=page_size
+            page_size=page_size,
+            sort_by=sort_by,
+            sort_order=sort_order
         )
         
         return jsonify({

@@ -1,3 +1,15 @@
+"""loguru 日志初始化（控制台 + 轮转文件）。
+
+供**独立脚本/离线作业**使用；web 与服务层的日志配置在 app/__init__.py，
+两边互不干涉。
+
+注意：setup_logger 先 `logger.remove()` 清空**全部** handler 再重建，
+因此重复调用是幂等的（不会叠加管道），但它也会把调用方先前添加的
+自定义 sink 一并清掉——在已被其他模块配置过日志的进程里慎用。
+
+文件默认 `logs/stock_analysis.log`，10 MB 轮转、保留 30 天、zip 压缩、UTF-8。
+"""
+
 import os
 from loguru import logger
 

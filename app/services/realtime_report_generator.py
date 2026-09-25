@@ -374,6 +374,8 @@ class RealtimeReportGenerator:
         }
 
     def _count_indicators_in_range(self, start_time: datetime, end_time: datetime, period_type: Optional[str] = None) -> int:
+        """统计时间区间内的指标记录数，可按周期过滤。
+        """
         frame = self.event_store.get_indicators_by_time_range(
             ts_code=None,
             period_type=period_type,
@@ -383,6 +385,10 @@ class RealtimeReportGenerator:
         return int(len(frame)) if not frame.empty else 0
 
     def _count_signals_in_range(self, start_time: datetime, end_time: datetime, period_type: Optional[str] = None) -> int:
+        """统计时间区间内的信号数，可按周期过滤。
+
+        先取区间数据再按 period_type 列过滤（该列可能不存在，需判列）。
+        """
         frame = self.event_store.get_signals_by_time_range(
             start_time=start_time,
             end_time=end_time,
@@ -400,6 +406,11 @@ class RealtimeReportGenerator:
         period_type: Optional[str] = None,
         limit: int = 100,
     ) -> List[Any]:
+        """取时间区间内最近的 limit 条信号并转成事件对象。
+
+        先按 datetime 降序取头部再转换，保证「最近」而不是「最早」；
+        返回领域对象而非 DataFrame，供报告生成器直接使用。
+        """
         frame = self.event_store.get_signals_by_time_range(start_time=start_time, end_time=end_time)
         if not frame.empty:
             if period_type and "period_type" in frame.columns:

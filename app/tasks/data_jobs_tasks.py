@@ -1,3 +1,18 @@
+"""数据任务后台入口：`run_data_job(run_id)` 的完整生命周期管理。
+
+**这是任务执行的唯一入口**（`@celery.task` 装饰只是形式——去 Celery 后
+app/celery_app.py 是本地桩，真实调用走 service 里的后台线程）。
+
+状态机约定（务必守住）：任何阶段的异常都必须把 run 落盘为 `failed`，
+否则它会永远停在 running，界面上看不出任务已死、`find_active_duplicate`
+还会永久拒绝同作业再次提交。为此最外层有兜底 except，连「failed 落盘本身
+失败」也留日志。
+
+两条联动：任务成功后按作业类型清缓存——`wide_table_builder` 成功会
+失效 data_reader 的宽表缓存与 text2sql 的 SQLite 临时表缓存，保证后续请求
+读到新数据；子进程 stdout/stderr 各截取末尾写入 result_json（日志有上限）。
+"""
+
 from loguru import logger
 
 from app import create_app

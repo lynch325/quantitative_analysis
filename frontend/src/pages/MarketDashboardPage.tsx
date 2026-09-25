@@ -204,7 +204,7 @@ export default function MarketDashboardPage() {
             <Card>
               <SectionTitle title="数据源状态" />
               <div className="px-3 pb-3 text-xs leading-6 text-fg-secondary">
-                <p>tushare / 扶摇 / TickFlow 的配置与健康探测。</p>
+                <p>扶摇 / TickFlow 的配置与健康探测。</p>
                 <Link to="/datasources" className="text-accent hover:underline">
                   → 数据源中心
                 </Link>

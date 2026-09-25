@@ -1,3 +1,13 @@
+"""数据作业：拉 Tushare 技术因子（复权价 + MACD/KDJ/RSI/BOLL/CCI）→ `data/stk_factor/daily/`。
+
+`FIELDS` 是落盘白名单，列必须与 data_reader.STANDARD_COLUMNS["stk_factor"] 对齐，
+否则下游读表时列会被裁掉。骨架与调度约定见 parquet_job_helpers.DailyFetchJob。
+
+注意：registry 中 job_type `stk_factor` 现指向 `stk_factor_derived.py`
+（由本地日线自算同一组字段，不依赖外部源）；本脚本是 Tushare 版本，
+未在注册表内，作为对照/备用保留。
+"""
+
 from db_utils import DatabaseUtils
 from parquet_job_helpers import DailyFetchJob
 

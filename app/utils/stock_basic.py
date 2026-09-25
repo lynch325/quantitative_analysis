@@ -1,3 +1,13 @@
+"""数据作业：下载股票基础资料 → 单文件表 `data/stock_basic.parquet`。
+
+三种上市状态（L 上市 / D 退市 / P 暂停）都要拉，原因见下方 FIELDS 处的注释；
+输出路径由 `_resolve_output_path` 按 DATA_DIR 解析，`list_date` 由
+`_normalize_list_date` 归一成可比较格式，单交易所失败只告警跳过。
+
+注意：registry 中 job_type `stock_basic` 现指向 `stock_basic_fuyao.py`（扶摇源），
+本脚本是 Tushare 版本、未在注册表内。
+"""
+
 import os
 from pathlib import Path
 

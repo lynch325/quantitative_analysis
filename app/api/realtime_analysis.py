@@ -15,10 +15,8 @@ logger = logging.getLogger(__name__)
 # 创建蓝图
 realtime_analysis_bp = Blueprint('realtime_analysis', __name__, url_prefix='/api/realtime-analysis')
 
-# 初始化数据管理器
-data_manager = RealtimeDataManager(
-    tushare_token=os.getenv("TUSHARE_TOKEN") or os.getenv("tushare_token")
-)
+# 初始化数据管理器（分钟数据固定走 通达信 / Baostock，不使用 Tushare）
+data_manager = RealtimeDataManager()
 
 
 @realtime_analysis_bp.route('/data/sync', methods=['POST'])

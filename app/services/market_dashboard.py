@@ -36,6 +36,10 @@ def limit_ratio_for(ts_code: str) -> float:
 
 
 def _board_row(row: "pd.Series") -> Dict[str, Any]:
+    """把板块行情行转成前端 dict：价格与涨跌幅保留 3 位小数，缺失值统一为 None。
+
+    每列都显式判 NaN：NaN 直接进 JSON 会变成非法字面量，前端解析会失败。
+    """
     return {
         "ts_code": row["ts_code"],
         "name": row.get("name"),

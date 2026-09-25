@@ -1,3 +1,11 @@
+"""数据作业：拉同花顺口径资金流向（moneyflow_ths）→ `data/moneyflow_ths/daily/`。
+
+与 moneyflow.py（Tushare 口径）并存但**落到不同表**，避免口径混淆。
+
+注意：该表未登记在 data_reader.TABLE_DIRS 中，目前没有读表入口，
+写入结果只供人工/外部核对；本脚本也未在 registry 注册。
+"""
+
 from db_utils import DatabaseUtils
 from parquet_job_helpers import DailyFetchJob
 

@@ -1,3 +1,10 @@
+"""数据作业：下载公司资料 → 单文件表 `data/stock_company.parquet`。
+
+Tushare `stock_company` 按交易所分次查询，必须覆盖沪深北三市（EXCHANGES），
+只拉 SSE 会让深市/北市股票的公司信息永远缺失；单个交易所失败只告警跳过，
+三市全空时不写盘（避免用空表覆盖既有数据）。同一 ts_code 按先到者去重。
+"""
+
 import pandas as pd
 
 from db_utils import DatabaseUtils
@@ -11,6 +18,10 @@ FIELDS = "ts_code,exchange,chairman,manager,secretary,reg_capital,setup_date,pro
 
 
 def main():
+    """作业入口：按交易所逐个下载公司基本信息并合并落盘。
+
+    单个交易所失败只打印并继续，让一次作业尽量把数据拿全。
+    """
     pro = DatabaseUtils.init_tushare_api()
 
     frames = []

@@ -7,6 +7,16 @@ SOCKETIO_ASYNC_MODE=eventlet 时必须先 monkey_patch 再导入应用模块
 """
 
 import os
+import sys
+
+# Windows 控制台默认 GBK 时，启动报告里的 ⚠/中文 会让 print 抛 UnicodeEncodeError，
+# 这里强制把标准输出/错误流重配为 UTF-8（不依赖 PYTHONUTF8 环境变量）。
+for _stream in (sys.stdout, sys.stderr):
+    if _stream is not None:
+        try:
+            _stream.reconfigure(encoding='utf-8', errors='replace')
+        except Exception:  # noqa: BLE001
+            pass
 
 if os.getenv('SOCKETIO_ASYNC_MODE', 'threading') == 'eventlet':
     import eventlet

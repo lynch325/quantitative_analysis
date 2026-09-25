@@ -66,6 +66,11 @@ class ReportTemplate(db.Model):
     @classmethod
     def create_or_update_default_template(cls, template_name, template_type, description=None,
                                           template_config=None, components=None, created_by=None):
+        """按模板类型建或更新「默认模板」（同类型约定只保留一个默认）。
+
+        已有该类型的默认模板则原地更新并保持 is_default=True，否则新建后再置默认。
+        返回落库后的对象，供调用方直接取 id。
+        """
         template = cls.get_default_template(template_type)
         if template:
             return cls.update_template_by_id(
@@ -91,6 +96,13 @@ class ReportTemplate(db.Model):
 
     @classmethod
     def update_template_by_id(cls, template_id, **fields):
+        """按 id 更新模板，返回更新后的对象；未命中返回 None。
+
+        **白名单语义**：只处理 template_name / template_type / description /
+        template_config / components / is_active / is_default / created_by，
+        其余键静默忽略。template_config 与 components 传非空值时序列化为 JSON 文本落库；
+        更新会刷新 updated_at。
+        """
         template = cls.get_by_id(template_id)
         if not template:
             return None
@@ -154,6 +166,11 @@ class ReportTemplate(db.Model):
 
     @classmethod
     def list_templates(cls, active_only=None, template_type=None, limit=None):
+        """列出模板，按 created_at 降序（最新在前）。
+
+        active_only 为 None 时不过滤状态（True / False 分别只看启用 / 停用），
+        可选按模板类型过滤与 limit 截断。
+        """
         query = cls.query
         if active_only is True:
             query = query.filter_by(is_active=True)
@@ -246,6 +263,12 @@ class RealtimeReport(db.Model):
         generation_time=None,
         error_message=None,
     ):
+        """一次完成「建记录 + 写生成结果」，供报告生成器调用。
+
+        先 create_report 建壳（report_status 默认 generating），紧接着调 update_generation_result
+        写入内容 / 数据 / 终态 / 错误信息。分两步是刻意的：前端能在生成过程中先看到 generating，
+        不必等整份报告生成完才有记录。
+        """
         report = cls.create_report(
             report_name=report_name,
             report_type=report_type,
@@ -315,6 +338,11 @@ class RealtimeReport(db.Model):
 
     @classmethod
     def update_report_by_id(cls, report_id, **fields):
+        """按 id 更新报告字段，返回更新后的对象；未命中返回 None。
+
+        **白名单语义**：只处理列出的报告字段。report_content 与 report_data 传非字符串时
+        序列化为 JSON 文本落库 —— 调用方可以直接传 dict / list。
+        """
         report = cls.get_by_id(report_id)
         if not report:
             return None
@@ -334,6 +362,11 @@ class RealtimeReport(db.Model):
 
     @classmethod
     def create_or_update_report(cls, report_id=None, **fields):
+        """新建或更新报告的单一入口：report_id 为空则新建，否则转 update_report_by_id。
+
+        新建分支同样按白名单过滤字段，并对 report_content / report_data 做 JSON 序列化。
+        调用方无需自己判断走哪条路径。
+        """
         if report_id is None:
             report = cls(**{
                 key: json.dumps(value) if key in {'report_content', 'report_data'} and value is not None and not isinstance(value, str) else value
@@ -380,6 +413,8 @@ class RealtimeReport(db.Model):
 
     @classmethod
     def get_report_type_stats(cls):
+        """按报告类型聚合数量，返回 {类型: 数量}（供仪表盘图表直接用，无需再遍历）。
+        """
         from sqlalchemy import func
 
         stats = db.session.query(
@@ -390,6 +425,10 @@ class RealtimeReport(db.Model):
 
     @classmethod
     def list_reports(cls, report_type=None, limit=None):
+        """列出报告，按 generated_at 降序（最新在前）。
+
+        注意排序字段是 generated_at（生成时间）而非 created_at，可选按类型过滤与 limit 截断。
+        """
         query = cls.query
         if report_type:
             query = query.filter_by(report_type=report_type)
@@ -474,6 +513,12 @@ class ReportSubscription(db.Model):
 
     @classmethod
     def update_subscription_by_id(cls, subscription_id, **fields):
+        """按 id 更新订阅配置，返回更新后的对象；未命中返回 None。
+
+        **白名单语义**：只处理订阅名 / 模板 / 收件人 / 调度类型与配置 / 通知渠道 / 启用状态等字段。
+        schedule_config 与 notification_channels 传非空值时序列化为 JSON 文本落库；
+        更新会刷新 updated_at。
+        """
         subscription = cls.get_by_id(subscription_id)
         if not subscription:
             return None
@@ -539,6 +584,10 @@ class ReportSubscription(db.Model):
 
     @classmethod
     def list_subscriptions(cls, active_only=None, limit=None):
+        """列出订阅，按 created_at 降序（最新在前）。
+
+        active_only 为 None 时不过滤状态，可选 limit 截断。
+        """
         query = cls.query
         if active_only is True:
             query = query.filter_by(is_active=True)

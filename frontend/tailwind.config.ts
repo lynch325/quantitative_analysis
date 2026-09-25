@@ -37,30 +37,42 @@ const config: Config = {
         input: '4px',
         dialog: '12px',
       },
+      // 与 theme.css 的 body 栈保持一致：中文字体顺序不同会在切路由时看到字重变化
       fontFamily: {
         sans: [
           'Inter',
-          '"HarmonyOS Sans SC"',
           '"PingFang SC"',
+          '"HarmonyOS Sans SC"',
           '"Microsoft YaHei"',
+          '"Noto Sans SC"',
           'system-ui',
           'sans-serif',
         ],
+        // 末段补符号与中文回退：▲/▼（U+25B2/25BC）不在 JetBrains Mono 覆盖范围内，
+        // 缺字形时会掉到别的字体的替代字形，箭头与数字基线会抖
         mono: [
           '"JetBrains Mono"',
           'ui-monospace',
           'SFMono-Regular',
           'Menlo',
           'Consolas',
+          '"Segoe UI Symbol"',
+          '"Microsoft YaHei"',
           'monospace',
         ],
       },
+      // 中文字面框高，正文行高需比拉丁文更松；下限 11px（<12px 中文会笔画粘连，
+      // 但表头/徽章受密度约束，11px 作为可接受的折中）
       fontSize: {
-        '2xs': ['10px', '14px'],
-        xs: ['11px', '16px'],
-        sm: ['12px', '18px'],
-        base: ['13px', '20px'],
-        lg: ['15px', '22px'],
+        '2xs': ['11px', '15px'],
+        xs: ['12px', '17px'],
+        sm: ['13px', '19px'],
+        base: ['14px', '22px'],
+        lg: ['16px', '24px'],
+        xl: ['18px', '28px'],
+      },
+      lineHeight: {
+        body: '1.65',
       },
       transitionTimingFunction: {
         smooth: 'cubic-bezier(0.16, 1, 0.3, 1)',

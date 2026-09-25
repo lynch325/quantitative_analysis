@@ -15,6 +15,8 @@ class AiChatSession(db.Model):
     updated_at = db.Column(db.DateTime, nullable=False, default=now_local, onupdate=now_local)
 
     def to_dict(self):
+        """会话的 API 形态（只含 id / 标题 / 时间，消息列表单独接口拉取）；时间转 ISO 串。
+        """
         return {
             'id': self.id,
             'title': self.title,
@@ -51,6 +53,10 @@ class AiChatMessage(db.Model):
     created_at = db.Column(db.DateTime, nullable=False, default=now_local)
 
     def to_dict(self):
+        """消息的 API 形态：role / content 之外还带**工具调用元信息**
+        （tool_name、tool_args、tool_ok、tool_result、duration_ms），前端据此渲染
+        工具调用过程与耗时；时间转 ISO 串。
+        """
         return {
             'id': self.id,
             'session_id': self.session_id,

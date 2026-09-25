@@ -39,6 +39,11 @@ def _now_iso() -> str:
 
 
 def _as_iso(value: Any) -> Optional[str]:
+    """把值规整成 ISO 字符串（None / 空串 → None）。
+
+    落盘前统一时间列格式：Timestamp、datetime 或任何带 isoformat 的对象都能转，
+    保证库里 created_at / updated_at 是可比较的字符串而不是对象。
+    """
     if value is None or value == "":
         return None
     if isinstance(value, str):
@@ -51,6 +56,11 @@ def _as_iso(value: Any) -> Optional[str]:
 
 
 def _to_python_scalar(value: Any) -> Any:
+    """把 pandas / numpy 标量还原成 Python 原生值；缺失值 → None。
+
+    parquet 读出的 np.int64、pd.Timestamp 直接进 json.dumps 会抛错，
+    所有出库字段都要先过这里。
+    """
     if pd.isna(value):
         return None
     if isinstance(value, (pd.Timestamp, datetime)):
@@ -64,6 +74,10 @@ def _to_python_scalar(value: Any) -> Any:
 
 
 def _normalize_json(value: Any) -> Any:
+    """把 JSON 列的值规整成 dict / list：字符串尝试反序列化，失败则原样返回。
+
+    历史写入形态不一（有的落 JSON 文本、有的落对象），读取侧统一在此归一。
+    """
     if value is None:
         return None
     if isinstance(value, (dict, list)):
@@ -74,6 +88,24 @@ def _normalize_json(value: Any) -> Any:
         except Exception:
             return value
     return value
+
+
+def _jsonify_object_columns(frame: pd.DataFrame) -> pd.DataFrame:
+    """把 object 列中的 dict/list 单元格序列化为 JSON 字符串。
+
+    Parquet 无法写入"没有子字段的空 struct"（例如 params={}），
+    pyarrow 会抛 ArrowNotImplementedError 让整表写入失败；
+    统一转成字符串后由读取侧的 _normalize_json 还原。
+    """
+    for column in frame.columns:
+        if frame[column].dtype != object:
+            continue
+        frame[column] = frame[column].map(
+            lambda value: json.dumps(value, ensure_ascii=False)
+            if isinstance(value, (dict, list))
+            else value
+        )
+    return frame
 
 
 class ParquetStateStore:
@@ -93,6 +125,11 @@ class ParquetStateStore:
         return self.base_dir / f"{name}.parquet"
 
     def read_frame(self, name: str) -> pd.DataFrame:
+        """读取整张状态表；表文件不存在时返回空 DataFrame。
+
+        读取失败一律抛 StateStoreError —— **绝不能返回空表**：上层读-改-写会把
+        「空表」当成当前状态，随后的写回会把已有数据静默清空。
+        """
         path = self.path_for(name)
         if not path.is_file():
             return pd.DataFrame()
@@ -112,6 +149,7 @@ class ParquetStateStore:
         frame = df.copy()
         if not frame.empty:
             frame = frame.reset_index(drop=True)
+        frame = _jsonify_object_columns(frame)
         tmp_path = path.with_name(f"{path.name}.tmp.{os.getpid()}")
         try:
             frame.to_parquet(tmp_path, index=False)
@@ -137,6 +175,10 @@ class ParquetStateStore:
 
     def _partition_path(self, name: str, partition_key: str,
                         partition_value: str) -> Path:
+        """分区文件路径：`{base_dir}/{name}/{partition_column}={value}/data.parquet`。
+
+        value 不做转义，调用方传入的日期/键值必须已是文件系统安全的形式。
+        """
         return self.base_dir / name / f"{partition_key}={partition_value}" / "data.parquet"
 
     def list_partitions(self, name: str, partition_key: str = "trade_date") -> List[str]:
@@ -170,6 +212,7 @@ class ParquetStateStore:
         frame = df.copy()
         if not frame.empty:
             frame = frame.reset_index(drop=True)
+        frame = _jsonify_object_columns(frame)
         tmp_path = path.with_name(f"{path.name}.tmp.{os.getpid()}")
         try:
             frame.to_parquet(tmp_path, index=False)
@@ -179,6 +222,10 @@ class ParquetStateStore:
                 tmp_path.unlink(missing_ok=True)
 
     def next_integer_id(self, name: str, column: str = "id") -> int:
+        """取该表的下一个自增 id（现有最大值 + 1；空表或列缺失时从 1 起）。
+
+        **必须在 store.locked() 内调用**：并发创建时两个进程会拿到同一个 id。
+        """
         df = self.read_frame(name)
         if df.empty or column not in df.columns:
             return 1
@@ -196,6 +243,11 @@ class FactorRepository:
         self.store = store
 
     def upsert_definition(self, record: Dict[str, Any]) -> Dict[str, Any]:
+        """写入或更新因子定义（按 factor_id 唯一，已存在则整行替换）。
+
+        持表锁读-改-写；is_active 缺省 True，created_at 缺失时补当前时间，
+        写入时刷新 updated_at。返回落库后的记录。
+        """
         now = _now_iso()
         record = {
             **record,
@@ -216,6 +268,10 @@ class FactorRepository:
         return record
 
     def list_definitions(self, include_inactive: bool = False) -> List[Dict[str, Any]]:
+        """列出因子定义（默认只含启用项），按 factor_id 排序。
+
+        每行经 _record_to_dict 归一；include_inactive=True 时含已停用（软删除）的定义。
+        """
         df = self.store.read_frame(self.TABLE_DEFINITIONS)
         if df.empty:
             return []
@@ -226,6 +282,10 @@ class FactorRepository:
         return [_record_to_dict(row) for _, row in df.iterrows()]
 
     def get_definition(self, factor_id: str) -> Optional[Dict[str, Any]]:
+        """按 factor_id 取单条定义；不存在返回 None。
+
+        同一 factor_id 出现多行时取最后一行（upsert 保证唯一，正常不会重复）。
+        """
         df = self.store.read_frame(self.TABLE_DEFINITIONS)
         if df.empty or "factor_id" not in df.columns:
             return None
@@ -235,6 +295,11 @@ class FactorRepository:
         return _record_to_dict(match.iloc[-1])
 
     def deactivate_definition(self, factor_id: str) -> bool:
+        """停用因子定义（软删除：置 is_active=False），返回是否命中。
+
+        持锁读-改-写；已停用或不存在时返回 False，不抛异常。
+        取值侧默认过滤 is_active，因此停用后历史因子值仍在库中，只是不再参与打分。
+        """
         with self.store.locked(self.TABLE_DEFINITIONS):
             df = self.store.read_frame(self.TABLE_DEFINITIONS)
             if df.empty or "factor_id" not in df.columns:
@@ -248,6 +313,15 @@ class FactorRepository:
         return True
 
     def save_values(self, frame: pd.DataFrame) -> int:
+        """写入因子值（按 trade_date 分区、按业务键去重后 upsert），返回写入行数。
+
+        口径与实现要点：
+        - 必填列 ts_code / trade_date / factor_id / factor_value，缺列直接抛 ValueError；
+        - trade_date 先按 format='mixed' 归一（库里两种格式混存），解析失败的行丢弃并告警；
+        - factor_value / z_score / percentile_rank 统一转 float32：因子精度足够，
+          库体积与读取内存约省一半；
+        - 只读-改-写涉及的分区（不是整表），单次写入成本与表总规模无关。
+        """
         if frame is None or frame.empty:
             return 0
         required = {"ts_code", "trade_date", "factor_id", "factor_value"}
@@ -343,6 +417,15 @@ class FactorRepository:
         start_date: Optional[str] = None,
         end_date: Optional[str] = None,
     ) -> pd.DataFrame:
+        """按因子 / 代码 / 日期窗口读因子值，返回升序 DataFrame。
+
+        性能与口径：
+        - 先按日期做**分区裁剪**，只读涉及的分区；
+        - 库内 trade_date 混存 YYYYMMDD 与 YYYY-MM-DD，必须 `format='mixed'`：
+          默认格式推断会把第二种格式静默变成 NaT 再被 dropna 丢掉（历史数据凭空消失）；
+        - end_date 为闭区间且含当日全天（内部加到 23:59:59.999999）；
+        - 结果按 (trade_date, ts_code, factor_id) 升序。
+        """
         self._migrate_legacy_values()
 
         # 分区裁剪：按日期过滤时只读取涉及的分区
@@ -415,6 +498,11 @@ class FactorRepository:
         ]
 
     def _dedupe_values(self, df: pd.DataFrame) -> pd.DataFrame:
+        """因子值去重：按 (ts_code, trade_date, factor_id) 保留最新一条（keep=last）。
+
+        去重前先把 trade_date 归一为 Timestamp —— 混格式字符串直接比较会让同一天的
+        两条记录都留下，读取端出现重复行。
+        """
         if df.empty:
             return df
         key_cols = [c for c in ["ts_code", "trade_date", "factor_id"] if c in df.columns]
@@ -442,6 +530,11 @@ class ModelRepository:
         self.store = store
 
     def upsert_definition(self, record: Dict[str, Any]) -> Dict[str, Any]:
+        """写入或更新模型定义（按 model_id 唯一）。
+
+        factor_list / model_params / training_config 三个结构化字段统一序列化成 JSON
+        文本落库，读取侧由 _record_to_dict 的 json_columns 反序列化。
+        """
         now = _now_iso()
         record = {
             **record,
@@ -463,6 +556,8 @@ class ModelRepository:
         return record
 
     def list_definitions(self, include_inactive: bool = False) -> List[Dict[str, Any]]:
+        """列出模型定义（默认只含启用项），按 model_id 排序；结构化字段已反序列化。
+        """
         df = self.store.read_frame(self.TABLE_DEFINITIONS)
         if df.empty:
             return []
@@ -472,6 +567,8 @@ class ModelRepository:
         return [_record_to_dict(row, json_columns={"factor_list", "model_params", "training_config"}) for _, row in df.iterrows()]
 
     def get_definition(self, model_id: str) -> Optional[Dict[str, Any]]:
+        """按 model_id 取单条定义；不存在返回 None（结构化字段已反序列化）。
+        """
         df = self.store.read_frame(self.TABLE_DEFINITIONS)
         if df.empty or "model_id" not in df.columns:
             return None
@@ -481,6 +578,11 @@ class ModelRepository:
         return _record_to_dict(match.iloc[-1], json_columns={"factor_list", "model_params", "training_config"})
 
     def delete_definition(self, model_id: str) -> bool:
+        """删除模型定义：软删定义（is_active=False）并**物理删除该模型的全部预测结果**。
+
+        先在定义表锁内软删，再在预测表锁内删除该 model_id 的预测行——预测数据
+        没有保留价值且体积大。任一步未命中返回 False。
+        """
         with self.store.locked(self.TABLE_DEFINITIONS):
             df = self.store.read_frame(self.TABLE_DEFINITIONS)
             if df.empty or "model_id" not in df.columns:
@@ -499,6 +601,11 @@ class ModelRepository:
         return True
 
     def save_predictions(self, frame: pd.DataFrame) -> int:
+        """写入模型预测（必填 ts_code / trade_date / model_id，缺列抛 ValueError）。
+
+        整表读-改-写 + 按 (ts_code, trade_date, model_id) 去重 keep=last，
+        因此重复预测是覆盖而非追加。返回入参行数。
+        """
         if frame is None or frame.empty:
             return 0
         required = {"ts_code", "trade_date", "model_id"}
@@ -522,6 +629,11 @@ class ModelRepository:
         trade_date: Optional[str] = None,
         ts_codes: Optional[Sequence[str]] = None,
     ) -> pd.DataFrame:
+        """按模型 / 交易日 / 代码过滤预测结果，按 (trade_date, ts_code, model_id) 升序返回。
+
+        trade_date 在库内是字符串，过滤用 astype(str) 等值比较（不做日期解析）；
+        因此调用方传 '2026-09-25' 与库内 '20260925' 不会匹配。
+        """
         df = self.store.read_frame(self.TABLE_PREDICTIONS)
         if df.empty:
             return df
@@ -542,6 +654,10 @@ class ModelRepository:
         return df
 
     def _dedupe_predictions(self, df: pd.DataFrame) -> pd.DataFrame:
+        """预测去重：按 (ts_code, trade_date, model_id) 保留最新一条（keep=last）。
+
+        与 _dedupe_values 同理，先归一 trade_date 再比较，避免混格式字符串留下旧行。
+        """
         if df.empty:
             return df
         key_cols = [c for c in ["ts_code", "trade_date", "model_id"] if c in df.columns]
@@ -567,6 +683,11 @@ class PortfolioRepository:
         self.store = store
 
     def create_position(self, record: Dict[str, Any]) -> Dict[str, Any]:
+        """新建持仓记录（id 在锁内分配），返回落库后的记录。
+
+        id 分配必须在表锁内，否则并发创建会拿到同一个 id；
+        is_active 缺省 True，created_at / updated_at 缺失时补当前时间。
+        """
         now = _now_iso()
         with self.store.locked(self.TABLE_POSITIONS):
             # id 分配必须在锁内：并发创建时两个进程会拿到同一个 id
@@ -586,6 +707,8 @@ class PortfolioRepository:
         return record
 
     def list_positions(self, portfolio_id: str, active_only: bool = True) -> List[Dict[str, Any]]:
+        """列出某组合的持仓（默认只含生效中），按 (created_at, id) 升序。
+        """
         df = self.store.read_frame(self.TABLE_POSITIONS)
         if df.empty or "portfolio_id" not in df.columns:
             return []
@@ -600,6 +723,11 @@ class PortfolioRepository:
         return [_record_to_dict(row) for _, row in df.iterrows()]
 
     def list_portfolio_ids(self, active_only: bool = True) -> List[str]:
+        """列出库中出现过的组合 id（去重排序）；active_only 时只看生效持仓。
+
+        注意这是从持仓行反推出来的集合：某组合的持仓被全部停用/删除后，
+        它的 id 也会从结果里消失。
+        """
         df = self.store.read_frame(self.TABLE_POSITIONS)
         if df.empty or "portfolio_id" not in df.columns:
             return []
@@ -608,6 +736,8 @@ class PortfolioRepository:
         return sorted(df["portfolio_id"].dropna().astype(str).unique().tolist())
 
     def get_position_by_stock(self, portfolio_id: str, ts_code: str) -> Optional[Dict[str, Any]]:
+        """取某组合下某只股票的生效持仓；不存在返回 None。
+        """
         df = self.store.read_frame(self.TABLE_POSITIONS)
         if df.empty:
             return None
@@ -620,6 +750,10 @@ class PortfolioRepository:
         return _record_to_dict(match.iloc[-1])
 
     def deactivate_portfolio(self, portfolio_id: str) -> int:
+        """停用整个组合（把其下所有生效持仓置 is_active=False），返回影响行数。
+
+        软删除：行仍留在库中，只是不再参与组合指标计算。
+        """
         with self.store.locked(self.TABLE_POSITIONS):
             df = self.store.read_frame(self.TABLE_POSITIONS)
             if df.empty or "portfolio_id" not in df.columns:
@@ -636,6 +770,10 @@ class PortfolioRepository:
         return count
 
     def upsert_position(self, record: Dict[str, Any]) -> Dict[str, Any]:
+        """按 id 覆盖写入持仓记录（无 id 时在锁内分配），返回落库记录。
+
+        与 create_position 的差别在语义：会先剔除同 id 的旧行再追加，属覆盖写入。
+        """
         now = _now_iso()
         with self.store.locked(self.TABLE_POSITIONS):
             record = {
@@ -726,6 +864,13 @@ class PortfolioRepository:
         return {"updated": updated, "total": len(positions)}
 
     def calculate_metrics(self, portfolio_id: str) -> Dict[str, Any]:
+        """按组合当前生效持仓重算汇总指标（不落库，返回 dict）。
+
+        口径：权重按持仓市值占比重算（无市值时退回行内 weight）；收益与风险指标
+        由各行**已算好的字段**累加（market_value / unrealized_pnl / var_1d）。
+        因此前提是入库前已按最新价刷新过持仓，否则拿到的是上次刷新时的快照。
+        没有生效持仓时返回空 dict。
+        """
         positions = self.list_positions(portfolio_id, active_only=True)
         if not positions:
             return {}
@@ -769,6 +914,12 @@ class BacktestRepository:
         initial_capital: float,
         rebalance_frequency: str,
     ) -> Dict[str, Any]:
+        """创建回测运行记录（id 在锁内分配），返回面向前端的 dict。
+
+        strategy_config 与 summary 以 JSON 文本落库；summary 初始为空 dict，
+        回测完成后由 update_summary 补写。返回值的字段名与读接口一致（不是库表列名），
+        前端无需区分读写两种形态。
+        """
         record = {
             "strategy_config_json": json.dumps(strategy_config or {}),
             "start_date": start_date,
@@ -800,6 +951,11 @@ class BacktestRepository:
         }
 
     def get_run(self, run_id: int) -> Optional[Dict[str, Any]]:
+        """按 run_id 取运行记录；不存在返回 None。
+
+        出参把库表列名翻译成前端字段（strategy_config_json → strategy_config 等），
+        并对数值列做类型兜底（initial_capital 缺失记 0）。
+        """
         df = self.store.read_frame(self.TABLE_RUNS)
         if df.empty or "id" not in df.columns:
             return None
@@ -819,6 +975,11 @@ class BacktestRepository:
         }
 
     def update_summary(self, run_id: int, summary: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """覆盖写入回测汇总（summary_json），返回更新后的记录；未命中返回 None。
+
+        这是**回测进度与终态的唯一写入点**：轮询接口读的 status / error 都在 summary 里，
+        改这里的结构要同步前端轮询解析。
+        """
         with self.store.locked(self.TABLE_RUNS):
             df = self.store.read_frame(self.TABLE_RUNS)
             if df.empty or "id" not in df.columns:
@@ -869,6 +1030,8 @@ class BacktestRepository:
         return reaped
 
     def list_runs(self) -> List[Dict[str, Any]]:
+        """列出全部回测运行记录，按 (created_at, id) 升序（与前端提交顺序一致）。
+        """
         df = self.store.read_frame(self.TABLE_RUNS)
         if df.empty:
             return []
@@ -908,6 +1071,11 @@ class BacktestRepository:
             self.store.write_frame(self.TABLE_RESULTS, df)
 
     def get_result(self, run_id: int) -> Optional[Dict[str, Any]]:
+        """取回测完整结果（大 JSON）；不存在返回 None。
+
+        与 summary 分离存储：summary 供轮询轻量读取，result 只在需要图表数据时按需拉取，
+        避免轮询把 MB 级结果反复搬进内存。
+        """
         df = self.store.read_frame(self.TABLE_RESULTS)
         if df.empty or "run_id" not in df.columns:
             return None
@@ -918,6 +1086,12 @@ class BacktestRepository:
 
 
 def _record_to_dict(row: Any, json_columns: Optional[Iterable[str]] = None) -> Dict[str, Any]:
+    """表行 → dict，并按列名做类型归一。
+
+    json_columns 中的列走 _normalize_json（反序列化）；created_at / updated_at /
+    trade_date 走 _as_iso（时间串）；其余走 _to_python_scalar。
+    各 Repository 的出参都经这里，改口径会同时影响所有下游 API 响应。
+    """
     json_columns = set(json_columns or [])
     if isinstance(row, pd.Series):
         data = row.to_dict()

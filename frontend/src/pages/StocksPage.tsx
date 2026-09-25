@@ -14,9 +14,14 @@ interface Filters {
 
 const EMPTY_FILTERS: Filters = { industry: '', area: '', search: '' }
 
+/** 列表排序状态；by 为 null 时用后端默认顺序（ts_code） */
+type SortState = { by: 'list_date' | null; order: 'asc' | 'desc' }
+const DEFAULT_SORT: SortState = { by: null, order: 'desc' }
+
 export default function StocksPage() {
   const [filters, setFilters] = useState<Filters>(EMPTY_FILTERS)
   const [applied, setApplied] = useState<Filters>(EMPTY_FILTERS)
+  const [sort, setSort] = useState<SortState>(DEFAULT_SORT)
   const [page, setPage] = useState(1)
   const [industries, setIndustries] = useState<string[]>([])
   const [areas, setAreas] = useState<string[]>([])
@@ -29,7 +34,7 @@ export default function StocksPage() {
     fetchAreas().then(setAreas).catch(() => setAreas([]))
   }, [])
 
-  const load = useCallback(async (targetPage: number, targetFilters: Filters) => {
+  const load = useCallback(async (targetPage: number, targetFilters: Filters, targetSort: SortState) => {
     setLoading(true)
     setError(null)
     try {
@@ -39,6 +44,8 @@ export default function StocksPage() {
         industry: targetFilters.industry || undefined,
         area: targetFilters.area || undefined,
         search: targetFilters.search || undefined,
+        sort_by: targetSort.by ?? undefined,
+        sort_order: targetSort.by ? targetSort.order : undefined,
       })
       setData(result)
       setPage(targetPage)
@@ -51,19 +58,36 @@ export default function StocksPage() {
   }, [])
 
   useEffect(() => {
-    load(1, EMPTY_FILTERS)
+    load(1, EMPTY_FILTERS, DEFAULT_SORT)
   }, [load])
 
   const handleFilter = (e: React.FormEvent) => {
     e.preventDefault()
     setApplied(filters)
-    load(1, filters)
+    load(1, filters, sort)
   }
 
   const handleReset = () => {
     setFilters(EMPTY_FILTERS)
     setApplied(EMPTY_FILTERS)
-    load(1, EMPTY_FILTERS)
+    setSort(DEFAULT_SORT)
+    load(1, EMPTY_FILTERS, DEFAULT_SORT)
+  }
+
+  // 点击「上市日期」表头：首次降序（新上市在前），再次切换升序
+  const handleSortListDate = () => {
+    const next: SortState =
+      sort.by === 'list_date'
+        ? { by: 'list_date', order: sort.order === 'desc' ? 'asc' : 'desc' }
+        : { by: 'list_date', order: 'desc' }
+    setSort(next)
+    load(1, applied, next)
+  }
+
+  // 未排序时给出弱化的 ⇅ 提示（否则静态下看不出表头可点击），排序后显示方向箭头
+  const sortIcon = (by: SortState['by']) => {
+    if (sort.by !== by) return <span className="sort-hint">⇅</span>
+    return sort.order === 'desc' ? ' ↓' : ' ↑'
   }
 
   const totalPages = data?.total_pages ?? 0
@@ -142,7 +166,7 @@ export default function StocksPage() {
         <div className="panel-body tight table-container">
           {error ? (
             <div className="p-3">
-              <ErrorState message={error} onRetry={() => load(page, applied)} />
+              <ErrorState message={error} onRetry={() => load(page, applied, sort)} />
             </div>
           ) : loading ? (
             <TableSkeleton rows={10} />
@@ -155,7 +179,9 @@ export default function StocksPage() {
                     <th>股票名称</th>
                     <th>行业</th>
                     <th>地域</th>
-                    <th>上市日期</th>
+                    <th className="sortable" onClick={handleSortListDate} title="点击按上市日期排序">
+                      上市日期{sortIcon('list_date')}
+                    </th>
                     <th className="num">操作</th>
                   </tr>
                 </thead>
@@ -193,19 +219,19 @@ export default function StocksPage() {
                   <nav>
                     <ul className="pagination pagination-sm mb-0">
                       <li className={`page-item ${page <= 1 ? 'disabled' : ''}`}>
-                        <button className="page-link" onClick={() => load(page - 1, applied)}>
+                        <button className="page-link" onClick={() => load(page - 1, applied, sort)}>
                           上一页
                         </button>
                       </li>
                       {pageButtons().map((p) => (
                         <li key={p} className={`page-item ${p === page ? 'active' : ''}`}>
-                          <button className="page-link" onClick={() => load(p, applied)}>
+                          <button className="page-link" onClick={() => load(p, applied, sort)}>
                             {p}
                           </button>
                         </li>
                       ))}
                       <li className={`page-item ${page >= totalPages ? 'disabled' : ''}`}>
-                        <button className="page-link" onClick={() => load(page + 1, applied)}>
+                        <button className="page-link" onClick={() => load(page + 1, applied, sort)}>
                           下一页
                         </button>
                       </li>

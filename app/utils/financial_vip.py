@@ -54,6 +54,11 @@ def resolve_report_periods(
 
 
 def _fetch_period(api, api_name: str, period: str, fields: List[str]):
+    """调用 Tushare 财报接口拉单个报告期，并把「权限 / 积分不足」翻译成可读错误。
+
+    不翻译的话调用方只看到一句原始报错，无法判断是 token 权限问题还是查询参数问题；
+    其他异常原样抛出。
+    """
     try:
         return api(period=period, fields=fields)
     except Exception as exc:

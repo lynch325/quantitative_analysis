@@ -1,3 +1,8 @@
+"""【已废弃】baostock 日线抓取 → `data/baostock_daily/daily/`（未注册、无读取方）。
+
+保留原因与恢复条件见紧随其后的 DEPRECATED 注释：日期区间硬编码、无视
+DATA_JOB_* 环境变量，且写入表没有消费方——日线主链路是 daily_history。
+"""
 # DEPRECATED: 本脚本已从 data_jobs 注册表摘除。
 # 原因：日期区间硬编码、无视 DATA_JOB_* 环境变量，且写入的 baostock_daily/daily
 # 表没有任何读取方（实时分钟线走 stock_minute/，由通达信同步服务维护）。
@@ -14,6 +19,11 @@ def _to_bs_code(ts_code: str) -> str:
 
 
 def _fetch_daily(stock_code: str, start_date: str, end_date: str) -> pd.DataFrame:
+    """用 baostock 拉单只股票的日线，逐行迭代结果集拼成 DataFrame。
+
+    adjustflag=2 表示前复权；字段集合是固定清单。
+    注意 baostock 的分钟/日线接口用 error_code 加游标迭代，游标耗尽即结束。
+    """
     rs = bs.query_history_k_data_plus(
         stock_code,
         "date,time,code,open,high,low,close,volume,amount",
@@ -29,6 +39,11 @@ def _fetch_daily(stock_code: str, start_date: str, end_date: str) -> pd.DataFram
 
 
 def main():
+    """作业入口：登录 baostock，再按 stock_basic 清单逐只拉日线并汇总落盘。
+
+    **窗口日期是写死的常量**（历史遗留脚本，不按交易日历增量），
+    stock_basic 为空时直接跳过、不报错。要改成可配置需同时改调用方与参数来源。
+    """
     stock_list = get_stock_codes()
     if not stock_list:
         print("[baostock_daily] stock_basic.parquet is empty, skip.")

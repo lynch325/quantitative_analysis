@@ -139,6 +139,11 @@ class PortfolioPosition(db.Model):
 
     @classmethod
     def get_by_portfolio_and_id(cls, portfolio_id, position_id):
+        """按「组合 id + 持仓 id」双条件取单条持仓；不存在返回 None。
+
+        两个条件同时限定是刻意的：持仓 id 只在其所属组合语境下有意义，
+        只按 id 查会跨组合误命中。
+        """
         return cls.query.filter_by(
             id=position_id,
             portfolio_id=portfolio_id,
@@ -146,6 +151,12 @@ class PortfolioPosition(db.Model):
 
     @classmethod
     def update_position_by_id(cls, portfolio_id, position_id, **fields):
+        """按 id 更新持仓，返回更新后的对象；未命中返回 None。
+
+        **白名单语义**：只处理仓位 / 成本 / 现价 / 板块 / 止损止盈 / 启用状态。
+        current_price 有值时**重算派生字段** market_value 与 unrealized_pnl
+        （按 仓位×现价 与 (现价−成本)×仓位），不接受调用方直接写入；随后刷新 updated_at。
+        """
         position = cls.get_by_portfolio_and_id(portfolio_id, position_id)
         if not position:
             return None
@@ -164,6 +175,11 @@ class PortfolioPosition(db.Model):
 
     @classmethod
     def delete_position_by_id(cls, portfolio_id, position_id):
+        """删除持仓 —— **软删除**：置 is_active=False，行仍留在库中。
+
+        列表查询默认 active_only=True，因此删除后不再出现在组合里；
+        返回 False 表示 id 不存在（已删除的再次删除同样返回 False）。
+        """
         position = cls.get_by_portfolio_and_id(portfolio_id, position_id)
         if not position:
             return False

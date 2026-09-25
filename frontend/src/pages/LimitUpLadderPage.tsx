@@ -23,6 +23,15 @@ function yi(amount: number | null | undefined): string {
   return value >= 100 ? `${value.toFixed(1)}亿` : `${value.toFixed(2)}亿`
 }
 
+/**
+ * date input 的 yyyy-MM-dd → 后端 YYYYMMDD 口径。
+ * 三池接口（limit-up/down/break pool）用 `_DATE_RE = \d{8}` 校验，
+ * 直接把 HTML date 的 yyyy-MM-dd 传过去会 400「date 格式应为 YYYYMMDD」。
+ */
+function toYmd(iso: string): string {
+  return iso.replace(/-/g, '')
+}
+
 /** 连板数字 → 梯队色（越高越热） */
 function ladderTone(cnt: number | undefined): string {
   if (!cnt) return 'text-fg-muted'
@@ -335,17 +344,17 @@ export default function LimitUpLadderPage() {
   // 三池全部预取：KPI 行需要跌停/炸板总数，切换 tab 无需等待
   const upQuery = useQuery({
     queryKey: ['market', 'limit-up-pool', date],
-    queryFn: () => fetchLimitUpPool(date || undefined),
+    queryFn: () => fetchLimitUpPool(date ? toYmd(date) : undefined),
     refetchInterval: date ? false : 60_000,
   })
   const downQuery = useQuery({
     queryKey: ['market', 'limit-down-pool', date],
-    queryFn: () => fetchLimitDownPool(date || undefined),
+    queryFn: () => fetchLimitDownPool(date ? toYmd(date) : undefined),
     refetchInterval: date ? false : 60_000,
   })
   const breakQuery = useQuery({
     queryKey: ['market', 'limit-break-pool', date],
-    queryFn: () => fetchLimitBreakPool(date || undefined),
+    queryFn: () => fetchLimitBreakPool(date ? toYmd(date) : undefined),
     refetchInterval: date ? false : 60_000,
   })
 
@@ -418,7 +427,7 @@ export default function LimitUpLadderPage() {
           <SectionTitle
             icon={<Flame size={13} />}
             title="连板天梯矩阵"
-            hint="近 15 个交易日 · 各梯队家数"
+            hint="固定近 30 个交易日（扶摇接口不支持指定日期，上方日期筛选对它无效）"
           />
           {ladderQuery.isLoading ? (
             <SkeletonRows rows={6} />

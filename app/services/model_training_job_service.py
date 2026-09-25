@@ -1,3 +1,15 @@
+"""模型训练任务的进程内追踪：提交、进度快照与结果供前端轮询。
+
+定位：这是**轻量进程内**实现（无 Celery/Redis），训练跑在
+ThreadPoolExecutor(max_workers=2) 里，任务状态存在 self.job_store 字典中——
+- 进程重启即丢历史任务，多 worker 部署时各进程看到的状态不同；
+- job_store 只进不出会缓慢泄漏，超过 MAX_TRACKED_JOBS(200) 时按 created_at
+  从旧到新淘汰**已结束**的任务（运行中的不淘汰）。
+
+提交时会先用 MLModelManager.resolve_training_date_range 校正日期区间（保证
+尾部样本能算出未来收益标签），校正结果与原因写入任务日志，前端轮询可见。
+"""
+
 from concurrent.futures import ThreadPoolExecutor
 from copy import deepcopy
 from app.utils.time_utils import now_local_iso
@@ -22,6 +34,11 @@ class ModelTrainingJobService:
         self._executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="model-train")
 
     def _evict_finished_jobs_locked(self) -> None:
+        """任务数超过上限时淘汰**已结束**的任务（success / failed / cancelled）。
+
+        按 created_at 字符串排序近似 FIFO；运行中的任务永不淘汰。
+        **调用方必须已持有 self._lock**（函数名以 _locked 结尾即为此约定）。
+        """
         if len(self.job_store) <= self.MAX_TRACKED_JOBS:
             return
         ordered = sorted(
@@ -36,6 +53,12 @@ class ModelTrainingJobService:
                 del self.job_store[stale_id]
 
     def submit_job(self, model_id: str, start_date: str, end_date: str) -> Dict[str, Any]:
+        """提交训练任务并入队，返回任务快照。
+
+        日期窗口先经 resolve_training_date_range 按可用数据裁剪，
+        date_range_adjusted 标记是否被调整，调整原因写进 logs ——
+        用户能直接看到「为什么我传的窗口变了」。提交后需轮询查进度。
+        """
         resolved = self.manager.resolve_training_date_range(model_id, start_date, end_date)
         resolved_start_date = resolved["start_date"]
         resolved_end_date = resolved["end_date"]
@@ -73,6 +96,12 @@ class ModelTrainingJobService:
             return deepcopy(snapshot) if snapshot is not None else None
 
     def _run_job(self, job_id: str, model_id: str, start_date: str, end_date: str) -> None:
+        """训练任务的实际执行体（跑在线程里）。
+
+        通过 progress_callback 回写进度 / 步骤 / 日志，每次写入都持锁；
+        首次回调顺带补 started_at。异常在内部转成 failed 状态而不外抛 ——
+        线程里的异常没人接收，只有落进任务快照才可见。
+        """
         def progress_callback(progress: float, step: str, log_message: Optional[str] = None) -> None:
             with self._lock:
                 snapshot = self.job_store[job_id]

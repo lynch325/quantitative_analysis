@@ -56,6 +56,10 @@ def fetch_tickflow_names(client=None) -> Dict[str, str]:
 
 
 def _read_cache(path: Path, max_age_seconds: float) -> Optional[Dict[str, str]]:
+    """读取名称缓存；文件不存在、超过 max_age_seconds 或内容不合法都返回 None。
+
+    **任何异常都等价于「没有缓存」**（缓存坏了不该让功能失败），由上层回源重建。
+    """
     try:
         if not path.exists():
             return None
@@ -72,6 +76,10 @@ def _read_cache(path: Path, max_age_seconds: float) -> Optional[Dict[str, str]]:
 
 
 def _write_cache(path: Path, names: Dict[str, str]) -> None:
+    """写名称缓存：先写临时文件再原子替换，失败只记 debug 日志。
+
+    写缓存失败不影响名称供应，所以异常在这里被吞掉。
+    """
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         frame = pd.DataFrame({"ts_code": list(names.keys()), "name": list(names.values())})

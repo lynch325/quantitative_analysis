@@ -324,6 +324,11 @@ class FactorAnalyzer:
     @staticmethod
     def _empty_ic_result(factor_id: str, forward_period: int,
                          message: str) -> Dict[str, Any]:
+        """IC 分析的统一空结果骨架。
+
+        各类失败分支（数据不足、因子无值等）都返回同一形状，保证前端拿到的字段稳定，
+        只是 message 不同、summary 全为 None、ic_series 为空。
+        """
         return {
             'factor_id': factor_id,
             'forward_period': forward_period,

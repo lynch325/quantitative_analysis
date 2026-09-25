@@ -102,6 +102,11 @@ class QueryTemplate(db.Model):
 
     @classmethod
     def create_template(cls, template_id, template_name, intent_pattern=None, sql_template=None, parameters=None, is_active=True):
+        """新建 SQL 模板，返回落库对象。
+
+        template_id 是**调用方指定的业务主键**（非自增），重复 id 会撞唯一约束报错，
+        因此写入前应先查存在性。
+        """
         template = cls(
             template_id=template_id,
             template_name=template_name,
@@ -114,6 +119,10 @@ class QueryTemplate(db.Model):
 
     @classmethod
     def update_template_by_id(cls, template_id, **fields):
+        """按 template_id 更新模板，返回更新后的对象；未命中返回 None。
+
+        只处理 template_name / intent_pattern / sql_template / parameters / is_active，其余键忽略。
+        """
         template = cls.get_by_id(template_id)
         if not template:
             return None
@@ -199,6 +208,10 @@ class QueryHistory(db.Model):
 
     @classmethod
     def get_top_intents(cls, limit=5):
+        """统计出现次数最多的用户意图，返回 (intent, count) 列表（按次数降序）。
+
+        空值意图不计入；limit 为条数上限。
+        """
         return db.session.query(
             cls.intent,
             db.func.count(cls.intent).label('count')
@@ -210,6 +223,10 @@ class QueryHistory(db.Model):
 
     @classmethod
     def get_top_templates(cls, limit=5):
+        """统计命中次数最多的模板，返回 (template_used, count) 列表（按次数降序）。
+
+        空值不计入，用于观察哪些模板真正被用上。
+        """
         return db.session.query(
             cls.template_used,
             db.func.count(cls.template_used).label('count')
@@ -259,6 +276,11 @@ class BusinessDictionary(db.Model):
 
     @classmethod
     def create_dictionary(cls, category, standard_term, synonyms=None, description=None, mapping_field=None, mapping_table=None, is_active=True):
+        """新建业务词典条目，返回落库对象。
+
+        一条记录 = 标准术语 + 同义词 + 可选的字段/表映射，供 Text2SQL 做术语归一
+        （把用户口语映射到库内字段名）。
+        """
         item = cls(
             category=category,
             standard_term=standard_term,
@@ -276,6 +298,11 @@ class BusinessDictionary(db.Model):
 
     @classmethod
     def update_dictionary_by_id(cls, dictionary_id, **fields):
+        """按 id 更新词典条目，返回更新后的对象；未命中返回 None。
+
+        只处理 category / standard_term / synonyms / description / mapping_field /
+        mapping_table / is_active，其余键忽略。
+        """
         dictionary = cls.get_by_id(dictionary_id)
         if not dictionary:
             return None

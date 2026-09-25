@@ -19,6 +19,15 @@ from pathlib import Path
 project_root = Path(__file__).parent
 sys.path.insert(0, str(project_root))
 
+# Windows 控制台/重定向为 GBK 时，下面的 ✅/⚠️ 等字符会让 print 抛
+# UnicodeEncodeError（run.py 已有同样的保护，这里补齐）。
+for _stream in (sys.stdout, sys.stderr):
+    if _stream is not None:
+        try:
+            _stream.reconfigure(encoding='utf-8', errors='replace')
+        except Exception:  # noqa: BLE001
+            pass
+
 from app import create_app
 from app.extensions import db
 from app.services.factor_engine import FactorEngine
@@ -51,7 +60,7 @@ class SystemManager:
         
         # 检查必需的包
         required_packages = [
-            'flask', 'sqlalchemy', 'pandas', 'numpy', 'scikit-learn',
+            'flask', 'sqlalchemy', 'pandas', 'numpy', 'sklearn',
             'xgboost', 'lightgbm', 'cvxpy', 'loguru', 'requests'
         ]
         

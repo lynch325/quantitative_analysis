@@ -124,6 +124,10 @@ class FuyaoClient:
     # ---- 基础请求 ----
 
     def _throttle(self) -> None:
+        """请求间限速：距上次请求不足 throttle_seconds 时先睡够。
+
+        持锁实现，保证多线程调用时全局串行；throttle_seconds ≤ 0 表示不限速。
+        """
         if self.throttle_seconds <= 0:
             return
         with self._throttle_lock:
@@ -133,6 +137,12 @@ class FuyaoClient:
             self._last_request_monotonic = time.monotonic()
 
     def _get(self, path: str, params: Optional[Dict[str, Any]] = None) -> Any:
+        """带鉴权与限速的 GET，把网络 / 业务错误统一翻译成 FuyaoError。
+
+        - 未配置 api_key 直接抛 no_key：提前失败，不发无谓请求；
+        - 值为 None 的查询参数会被剔除，避免被序列化成字符串 None；
+        - 非 200 响应按业务错误处理（错误码语义见项目 notes）。
+        """
         if not self.api_key:
             raise FuyaoError("no_key", f"未配置 {API_KEY_ENV}，请在 .env 中设置后重试")
         clean_params = {k: v for k, v in (params or {}).items() if v is not None}
